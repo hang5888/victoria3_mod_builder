@@ -199,8 +199,15 @@ class LoadDbTest(unittest.TestCase):
             db = data.load_db("common/company_types", origins)
             self.assertEqual(db["company_a"][1].id, "mod1")
             self.assertEqual(db["company_b"][1].id, "game")  # injected into, still the base definition
-            self.assertEqual(origins, {"company_a": ["game", "mod1"], "company_b": ["game", "mod1"],
+            sources = {key: [s.id for s, _b, _f in versions] for key, versions in origins.items()}
+            self.assertEqual(sources, {"company_a": ["game", "mod1"], "company_b": ["game", "mod1"],
                                        "company_c": ["mod2"]})
+            # each version is the definition as that source left it
+            self.assertEqual(origins["company_a"][0][1].get("icon"), "a")
+            self.assertEqual(origins["company_a"][1][1].get("icon"), "a2")
+            self.assertIsNone(origins["company_b"][0][1].get("x"))
+            self.assertEqual(origins["company_b"][1][1].get("x"), "y")
+            self.assertEqual(origins["company_b"][1][2], "zz_mod1.txt")
 
 
 class ProjectTest(unittest.TestCase):
@@ -292,6 +299,7 @@ class InterfaceTextTest(unittest.TestCase):
                        "localization", "done"],
         "home.stat.": ["companies", "buildings", "modifiers", "states", "mods"],
         "company.mode.": ["new", "override"],
+        "version_note.": ["active", "same", "hidden", "shown"],
         "block.": ["prestige_goods_trigger", "potential", "attainable", "possible", "can_establish_in",
                    "ai_construction_targets", "ai_weight"],
         "block.title.": ["prestige_goods_trigger", "potential", "attainable", "possible", "can_establish_in",

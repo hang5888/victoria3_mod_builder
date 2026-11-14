@@ -110,6 +110,7 @@ select.input { padding-right: 4px; }
 .btn.danger { color: var(--bad); }
 .btn.danger:hover { border-color: var(--bad); }
 .btn.small { padding: 1px 8px; font-size: 12px; }
+.btn.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 .btn.icon-btn { padding: 2px 8px; min-width: 28px; }
 
 .check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }

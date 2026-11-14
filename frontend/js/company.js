@@ -33,6 +33,7 @@ const filters = { query: '', source: '', building: '', region: '', prestige: '' 
 let listed = [];           // existing companies in the order they are listed
 let listLimit = PAGE;
 let expanded = null;
+const versionChoice = new Map();  // company key -> source of the version shown in the list
 let aiMode = 'same';       // ai_will_do: 'same' as possible, 'custom' or 'never'
 const template = { state: '', region: '', tech: '', buildings: null, level: '5', open: false };
 const els = {};
@@ -725,41 +726,70 @@ function matchesFilters(company) {
   return true;
 }
 
+// The version of a company shown in the list: the one in effect, or an earlier one picked
+// from its sources (base game, or a mod that was later overridden).
+function shownVersion(company) {
+  const version = company.versions.find((v) => v.source === versionChoice.get(company.key));
+  return version ? { ...company, ...version } : company;
+}
+
+function versionPicker(company) {
+  const last = company.sources[company.sources.length - 1];
+  const choice = versionChoice.get(company.key);
+  const version = company.versions.find((v) => v.source === choice);
+  const current = version ? choice : last;
+  return h('div', {},
+    h('div', { class: 'detail-chips' }, h('span', { class: 'muted' }, `${t('company.version')}: `),
+      company.sources.map((id) => h('button', {
+        class: 'btn small' + (id === current ? ' selected' : ''),
+        title: id === last ? t('company.source_active', { source: sourceName(id) }) : sourceName(id),
+        onclick: () => { versionChoice.set(company.key, id); renderList(); },
+      }, sourceName(id)))),
+    h('div', { class: 'muted small' }, t('version_note.' + (version ? versionDifference(company, version) : 'active'))));
+}
+
+// How an earlier version differs from the one in effect: 'same', 'hidden' (only in what the
+// list does not show: conditions, AI and other script) or 'shown'.
+const LISTED_FIELDS = ['building_types', 'extension_building_types', 'possible_prestige_goods',
+  'preferred_headquarters', 'prosperity_modifier'];
+function versionDifference(company, version) {
+  const differs = (field) => JSON.stringify(version[field]) !== JSON.stringify(company[field]);
+  if (LISTED_FIELDS.some(differs)) return 'shown';
+  return FIELDS.some(differs) ? 'hidden' : 'same';
+}
+
 function companyDetails(company) {
+  const shown = shownVersion(company);
   const line = (label, keys, kind) => keys.length > 0 && (ICON_KINDS.has(kind)
     ? h('div', { class: 'detail-chips' }, h('span', { class: 'muted' }, `${label}: `),
       keys.map((key) => objectChip(kind, key)))
     : h('div', {}, h('span', { class: 'muted' }, `${label}: `), keys.map((key) => nameOf(kind, key)).join(', ')));
   return h('div', { class: 'company-details' },
-    line(t('company.building_types'), company.building_types, 'buildings'),
-    line(t('company.extension_building_types'), company.extension_building_types, 'buildings'),
-    line(t('company.prestige_goods'), company.possible_prestige_goods, 'prestige_goods'),
-    line(t('company.headquarters'), company.preferred_headquarters, 'states'),
-    company.prosperity_modifier.length > 0 && h('ul', { class: 'modifier-lines' },
-      company.prosperity_modifier.map((modifier) => {
+    company.sources.length > 1 && versionPicker(company),
+    line(t('company.building_types'), shown.building_types, 'buildings'),
+    line(t('company.extension_building_types'), shown.extension_building_types, 'buildings'),
+    line(t('company.prestige_goods'), shown.possible_prestige_goods, 'prestige_goods'),
+    line(t('company.headquarters'), shown.preferred_headquarters, 'states'),
+    shown.prosperity_modifier.length > 0 && h('ul', { class: 'modifier-lines' },
+      shown.prosperity_modifier.map((modifier) => {
         const { text, tone } = formatModifier(modifier);
         return h('li', {}, h('b', { class: tone }, text), ' ', nameOf('modifiers', modifier.key));
       })),
-    h('div', { class: 'muted small' }, `${sourceName(company.source)} · ${company.file}`),
-    company.sources.length > 1 && h('div', { class: 'muted small' }, t('company.also_in', {
-      sources: company.sources.filter((id) => id !== company.source).map(sourceName).join(', '),
-    })),
+    h('div', { class: 'muted small' }, `${sourceName(shown.source)} · ${shown.file}`),
     h('div', { class: 'row' },
-      h('button', { class: 'btn', onclick: () => run(() => overrideCompany(company)) }, t('company.override')),
-      h('button', { class: 'btn', onclick: () => run(() => copyCompany(company)) }, t('company.copy'))));
+      h('button', { class: 'btn', onclick: () => run(() => overrideCompany(shown)) }, t('company.override')),
+      h('button', { class: 'btn', onclick: () => run(() => copyCompany(shown)) }, t('company.copy'))));
 }
 
 // A tag for every source that defines or changes the company; none for a base game only company.
-// The definition in effect is the strong one.
+// The last one is in effect and is the strong one.
 function sourceBadges(company) {
   if (company.sources.length === 1 && company.source === 'game') return null;
-  return h('span', { class: 'badges' }, company.sources.map((id) => {
-    const active = id === company.source && company.sources.length > 1;
-    return h('span', {
-      class: 'badge source' + (id === company.source ? '' : ' faded'),
-      title: active ? t('company.source_active', { source: sourceName(id) }) : sourceName(id),
-    }, sourceName(id));
-  }));
+  const last = company.sources[company.sources.length - 1];
+  return h('span', { class: 'badges' }, company.sources.map((id) => h('span', {
+    class: 'badge source' + (id === last ? '' : ' faded'),
+    title: id === last && company.sources.length > 1 ? t('company.source_active', { source: sourceName(id) }) : sourceName(id),
+  }, sourceName(id))));
 }
 
 function renderList() {

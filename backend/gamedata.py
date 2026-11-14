@@ -142,14 +142,19 @@ class GameData:
 
         REPLACE-style prefixes and plain redefinitions replace the earlier
         definition; INJECT-style prefixes add their statements to it. If
-        `origins` is a dict, it gets {key: [source ids]}: every source that
-        defines, replaces or injects into the key, in load order.
+        `origins` is a dict, it gets {key: [(Source, Block, file name)]}: the
+        definition as it stood after each source that defines, replaces or
+        injects into the key, in load order (the last one is in effect).
         """
         db = {}
 
-        def touched(key, source):
-            if origins is not None and key in db and source.id not in origins.setdefault(key, []):
-                origins[key].append(source.id)
+        def touched(key, source, rel_name):
+            if origins is None:
+                return
+            block = db[key][0]
+            snapshot = Block(list(block.entries), block.start, block.end, block.text)
+            versions = [v for v in origins.get(key, []) if v[0].id != source.id]
+            origins[key] = versions + [(source, snapshot, rel_name)]
 
         for source, path, rel_name in self.fs.list_files(rel_dir, ".txt"):
             try:
@@ -164,10 +169,10 @@ class GameData:
                 if prefix in INJECT_PREFIXES:
                     if key in db:
                         db[key][0].entries.extend(entry.value.entries)
-                        touched(key, source)
+                        touched(key, source, rel_name)
                     elif prefix == "INJECT_OR_CREATE":
                         db[key] = (entry.value, source, rel_name)
-                        touched(key, source)
+                        touched(key, source, rel_name)
                     elif prefix == "INJECT":
                         self.warnings.append(f"{source.name}: {rel_dir}/{rel_name}: INJECT target {key} not found")
                 elif prefix in ("REPLACE", "TRY_REPLACE") and key not in db:
@@ -175,7 +180,7 @@ class GameData:
                         self.warnings.append(f"{source.name}: {rel_dir}/{rel_name}: REPLACE target {key} not found")
                 else:
                     db[key] = (entry.value, source, rel_name)
-                    touched(key, source)
+                    touched(key, source, rel_name)
         return db
 
     def _load_companies(self):
@@ -184,9 +189,12 @@ class GameData:
         origins = {}
         for key, (block, source, rel_name) in self.load_db("common/company_types", origins).items():
             company = company_from_block(key, block)
-            company["source"] = source.id  # the definition in effect
-            company["sources"] = origins[key]  # every source that defines or changes it
+            company["source"] = source.id  # where the definition in effect was written
             company["file"] = rel_name
+            # Every source that defines or changes it, and the earlier versions to copy from.
+            company["sources"] = [s.id for s, _b, _f in origins[key]]
+            company["versions"] = [{**company_from_block(key, b), "source": s.id, "file": f}
+                                   for s, b, f in origins[key][:-1]]
             self.companies[key] = company
             self.dlc_features.update(_DLC_FEATURE.findall(block.text[block.start:block.end]))
 
@@ -253,10 +261,11 @@ class GameData:
                  self.fs.list_files(COMPANY_ICON_DIR, suffixes, recursive=True)} - backgrounds
         # Mods may keep their images elsewhere; include whatever companies point at.
         for company in self.companies.values():
-            if company["icon"]:
-                icons.add(company["icon"])
-            if company["background"]:
-                backgrounds.add(company["background"])
+            for version in [company, *company["versions"]]:
+                if version["icon"]:
+                    icons.add(version["icon"])
+                if version["background"]:
+                    backgrounds.add(version["background"])
         self.icons = sorted(icons)
         self.backgrounds = sorted(backgrounds)
 
