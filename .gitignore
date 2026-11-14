@@ -1,0 +1,6 @@
+# 本機設定（含個人電腦的路徑）
+settings.json
+
+# Python
+__pycache__/
+*.pyc
