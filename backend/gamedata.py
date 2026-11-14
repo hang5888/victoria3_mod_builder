@@ -171,7 +171,9 @@ class GameData:
         self.buildings = {}
         for key, (block, _source, _file) in self.load_db("common/buildings").items():
             group = block.get("building_group")
-            self.buildings[key] = {"group": group if isinstance(group, str) else ""}
+            icon = block.get("icon")  # monuments and a few others have none
+            self.buildings[key] = {"group": group if isinstance(group, str) else "",
+                                   "icon": icon if isinstance(icon, str) else ""}
 
     def _load_modifiers(self):
         self.modifiers = {}
@@ -207,7 +209,9 @@ class GameData:
         self.prestige_goods = {}
         for key, (block, _source, _file) in self.load_db("common/prestige_goods").items():
             base = block.get("base_good")
-            self.prestige_goods[key] = base if isinstance(base, str) else ""
+            texture = block.get("texture")
+            self.prestige_goods[key] = {"base": base if isinstance(base, str) else "",
+                                        "icon": texture if isinstance(texture, str) else ""}
 
     def _load_textures(self):
         suffixes = (".dds", ".png")  # some mods ship .png icons
@@ -262,7 +266,7 @@ class GameData:
         buildings = []
         for key, info in self.buildings.items():
             root = group_root(info["group"])
-            buildings.append({"key": key, "name": loc.name(key), "group": root,
+            buildings.append({"key": key, "name": loc.name(key), "group": root, "icon": info["icon"],
                               "group_name": loc.name(root) if root else "", "used": key in used_buildings})
         modifiers = [{"key": key, "name": loc.name(key), "used": key in used_modifiers, **info}
                      for key, info in self.modifiers.items()]
@@ -279,7 +283,9 @@ class GameData:
             "states": states,
             "regions": [{"key": key, "name": loc.name(key)} for key in self.regions],
             "countries": [{"key": tag, "name": loc.name(tag)} for tag in self.countries],
-            "prestige_goods": [{"key": key, "name": loc.name(key)} for key in self.prestige_goods],
+            "prestige_goods": [{"key": key, "name": loc.name(key), "icon": good["icon"],
+                                "good_name": loc.name(good["base"]) if good["base"] else ""}
+                               for key, good in self.prestige_goods.items()],
             "categories": [{"key": c, "name": loc.name(f"company_category_{c}")} for c in categories],
             "default_category_name": loc.name("company_category_capitalist_owned"),
             "icons": self.icons,

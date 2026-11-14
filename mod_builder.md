@@ -93,8 +93,8 @@
 | --- | --- | --- |
 | 公司 | 右欄的現有公司清單 | `common/company_types/` |
 | 各種 buff / debuff | 公司加成的選項 | `common/modifier_type_definitions/` |
-| 產業名稱 | 公司可經營的產業選項 | `common/buildings/`、`common/building_groups/` |
-| 名貴商品 | 公司的名貴商品選項 | `common/prestige_goods/` |
+| 產業名稱 | 公司可經營的產業選項（圖示來自各建築的 `icon`） | `common/buildings/`、`common/building_groups/` |
+| 名貴商品 | 公司的名貴商品選項（圖示來自各商品的 `texture`） | `common/prestige_goods/` |
 | 國家 | 成立條件的國家選項 | `common/country_definitions/` |
 | 翻譯文件 | 把內部代碼顯示成可讀的名稱 | `localization/<語言>/`（`*_l_<語言>.yml`，UTF-8 BOM） |
 | 州名稱 | 總部與地區選項、地圖標示 | `map_data/state_regions/` |
@@ -200,7 +200,8 @@
 初版的限制：
 
 - 還沒有在遊戲裡實際載入產生的模組測試過。
-- 圖示、背景只能選現有的圖片，不能上傳自己的圖片。少數 BC7 壓縮的圖片無法預覽（仍可選用）。
+- 圖示、背景只能選現有的圖片，不能上傳自己的圖片。
+- 少數建築（多為奇觀）在遊戲檔案裡沒有圖示，清單中顯示空白。
 - 這個工具建立的模組不會被當成資料來源讀取（避免讀到自己正在編輯的內容）。
 - 工具建立的模組在遊戲裡應該排在其他模組後面，覆蓋才會生效。
 - 模組的 `INJECT:` 等部分修改寫法在讀取時是近似處理。

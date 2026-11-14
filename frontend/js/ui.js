@@ -82,9 +82,11 @@ const PAGE = 200;
 //   items:    [{key, name, sub}]  (sub: small secondary text)
 //   selected: keys chosen so far; multi: allow several
 //   thumb:    optional function item -> image URL (shows a picture grid)
+//   icon:     optional function item -> small image URL beside the name ('' for none)
 //   toggle:   optional {label, test(item), on} extra filter checkbox
 //   onDone:   called with the chosen keys
-export function openPicker({ title, items, selected = [], multi = true, thumb = null, wide = false, toggle = null, onDone }) {
+export function openPicker({ title, items, selected = [], multi = true, thumb = null, icon = null, wide = false,
+  toggle = null, onDone }) {
   const chosen = new Set(selected);
   let query = '';
   let limit = PAGE;
@@ -130,6 +132,10 @@ export function openPicker({ title, items, selected = [], multi = true, thumb = 
       },
         thumb && h('img', { loading: 'lazy', src: thumb(item), alt: '',
           onerror: (event) => event.target.classList.add('broken') }),
+        icon && (icon(item)
+          ? h('img', { class: 'picker-icon', loading: 'lazy', src: icon(item), alt: '',
+            onerror: (event) => event.target.classList.add('broken') })
+          : h('span', { class: 'picker-icon' })),
         h('span', { class: 'picker-text' },
           h('span', { class: 'picker-name' }, item.name),
           item.sub && h('span', { class: 'picker-sub' }, item.sub)));

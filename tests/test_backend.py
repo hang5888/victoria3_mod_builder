@@ -15,6 +15,7 @@ from backend.companies import (company_from_block, company_to_script, empty_comp
 from backend.localization import Localization, read_loc_file, read_loc_text  # noqa: E402
 from backend.mods import PROJECT_FILE  # noqa: E402
 from backend.pdx_script import braces_balanced, parse, split_prefix  # noqa: E402
+from backend.textures import _bc7_block  # noqa: E402
 
 COMPANY = """\
 company_test = { # a comment with { braces
@@ -152,6 +153,30 @@ class LocalizationTest(unittest.TestCase):
         self.assertEqual(Localization(entries).name("company_x"), "The Big Co.")
         self.assertEqual(Localization({}, Localization(entries)).name("other"), "Big")
         self.assertEqual(Localization({}).name("missing"), "missing")
+
+
+def bit_block(fields):
+    """16 bytes built from (value, bit count) fields, lowest bits first."""
+    value, pos = 0, 0
+    for field, bits in fields:
+        value |= field << pos
+        pos += bits
+    assert pos == 128
+    return value.to_bytes(16, "little")
+
+
+class TextureTest(unittest.TestCase):
+    def test_bc7_mode6(self):
+        # Mode 6: endpoints 0 = 127 with p-bit 1 (white, opaque), endpoints 1 = 0 with p-bit 0.
+        block = bit_block([(1 << 6, 7)] + [(127, 7), (0, 7)] * 4 + [(1, 1), (0, 1)]
+                          + [(0, 3), (15, 4)] + [(0, 4)] * 14)
+        pixels = _bc7_block(block)
+        self.assertEqual(pixels[0], (255, 255, 255, 255))
+        self.assertEqual(pixels[1], (0, 0, 0, 0))
+        self.assertEqual(pixels[15], (255, 255, 255, 255))
+
+    def test_bc7_reserved_mode(self):
+        self.assertEqual(_bc7_block(bytes(16)), [(0, 0, 0, 0)] * 16)
 
 
 class ProjectTest(unittest.TestCase):

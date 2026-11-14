@@ -1,7 +1,7 @@
 // Company builder: the company being edited (left), the editor (middle), existing companies (right).
 import { api, textureUrl } from './api.js';
 import { t } from './i18n.js';
-import { store, refreshState, loadData, language, languageName, nameOf } from './store.js';
+import { store, refreshState, loadData, language, languageName, nameOf, iconOf } from './store.js';
 import { h, fill, toast, errorText, confirmDialog, openPicker, debounce } from './ui.js';
 import { StateMap } from './map.js';
 
@@ -164,6 +164,29 @@ function thumb(path, size, className) {
     onerror: (event) => event.target.classList.add('broken') });
 }
 
+// Kinds of game objects that have their own small icon.
+const ICON_KINDS = new Set(['buildings', 'prestige_goods']);
+const ICON_SIZE = 64;
+
+// The object's small icon, or null when it has none.
+function objectIcon(kind, key) {
+  const path = iconOf(kind, key);
+  return path ? thumb(path, ICON_SIZE, 'chip-icon') : null;
+}
+
+// Icon option for openPicker; null for kinds without icons.
+function pickerIcon(kind) {
+  if (!ICON_KINDS.has(kind)) return null;
+  return (item) => {
+    const path = iconOf(kind, item.key);
+    return path ? textureUrl(path, ICON_SIZE) : '';
+  };
+}
+
+function objectChip(kind, key, ...extra) {
+  return h('span', { class: 'chip', title: key }, objectIcon(kind, key), nameOf(kind, key), extra);
+}
+
 function changed() {
   dirty = true;
   renderPreview();
@@ -256,7 +279,7 @@ function previewGroup(title, items, kind) {
   return h('div', { class: 'preview-group' },
     h('h4', {}, title),
     items.length
-      ? h('div', { class: 'chips' }, items.map((key) => h('span', { class: 'chip', title: key }, nameOf(kind, key))))
+      ? h('div', { class: 'chips' }, items.map((key) => objectChip(kind, key)))
       : h('span', { class: 'muted' }, t('common.none')));
 }
 
@@ -383,10 +406,10 @@ function imagesSection() {
 // A list of chosen game objects shown as removable chips, with a picker to add more.
 function chipField(name, kind, label, hint, sectionName, toggle) {
   const pick = () => openPicker({
-    title: label, selected: editing[name], toggle,
+    title: label, selected: editing[name], toggle, icon: pickerIcon(kind),
     items: store.data[kind].filter((item) => !item.sea).map((item) => ({
       key: item.key, name: item.name || item.key, used: item.used,
-      sub: item.group_name || (item.region && nameOf('regions', item.region)) || item.key,
+      sub: item.group_name || item.good_name || (item.region && nameOf('regions', item.region)) || item.key,
     })),
     onDone: (keys) => { editing[name] = keys; changed(); refresh(sectionName); },
   });
@@ -396,7 +419,7 @@ function chipField(name, kind, label, hint, sectionName, toggle) {
       h('button', { class: 'btn', onclick: pick }, t('common.choose'))),
     hint && h('p', { class: 'muted small' }, hint),
     h('div', { class: 'chips' }, editing[name].map((key) =>
-      h('span', { class: 'chip', title: key }, nameOf(kind, key),
+      objectChip(kind, key,
         h('button', { class: 'chip-remove', title: t('common.remove'), onclick: () => {
           editing[name] = editing[name].filter((k) => k !== key);
           changed();
@@ -507,7 +530,7 @@ function insertCondition(text) {
 
 function conditionHelpers() {
   const pickOne = (kind, name, title) => openPicker({
-    title, multi: false, selected: helper[name] ? [helper[name]] : [],
+    title, multi: false, selected: helper[name] ? [helper[name]] : [], icon: pickerIcon(kind),
     items: store.data[kind].filter((item) => !item.sea).map((item) => ({
       key: item.key, name: item.name || item.key, sub: item.group_name || item.key })),
     onDone: ([key]) => { helper[name] = key; refresh('conditions'); },
@@ -544,7 +567,8 @@ function conditionHelpers() {
     h('div', { class: 'row' },
       h('span', { class: 'helper-label' }, t('helper.building_level')),
       h('button', { class: 'btn', onclick: () => pickOne('buildings', 'building', t('helper.building')) },
-        helper.building ? nameOf('buildings', helper.building) : t('helper.building')),
+        helper.building ? [objectIcon('buildings', helper.building), nameOf('buildings', helper.building)]
+          : t('helper.building')),
       h('span', {}, '≥'), level,
       h('button', { class: 'btn', onclick: () => pickOne('states', 'state', t('helper.state')) },
         helper.state ? nameOf('states', helper.state) : t('helper.any_state')),
@@ -627,8 +651,10 @@ function matchesFilters(company) {
 }
 
 function companyDetails(company) {
-  const line = (label, keys, kind) => keys.length > 0 && h('div', {},
-    h('span', { class: 'muted' }, `${label}: `), keys.map((key) => nameOf(kind, key)).join(', '));
+  const line = (label, keys, kind) => keys.length > 0 && (ICON_KINDS.has(kind)
+    ? h('div', { class: 'detail-chips' }, h('span', { class: 'muted' }, `${label}: `),
+      keys.map((key) => objectChip(kind, key)))
+    : h('div', {}, h('span', { class: 'muted' }, `${label}: `), keys.map((key) => nameOf(kind, key)).join(', ')));
   return h('div', { class: 'company-details' },
     line(t('company.building_types'), company.building_types, 'buildings'),
     line(t('company.extension_building_types'), company.extension_building_types, 'buildings'),

@@ -281,6 +281,9 @@ select.input { padding-right: 4px; }
 .chip.mono { font-size: 12px; }
 .chip.filled { background: var(--accent-soft); color: var(--accent); }
 .chip.missing { background: none; border: 1px dashed var(--line); color: var(--muted); }
+.chip-icon { flex: none; width: 20px; height: 20px; margin: 1px 0 1px -5px; object-fit: contain; vertical-align: middle; }
+.btn .chip-icon { margin: -3px 4px -3px 0; }
+.detail-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .chip-remove { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 0 0 2px; font-size: 11px; }
 .chip-remove:hover { color: var(--bad); }
 
@@ -421,6 +424,7 @@ textarea.script.invalid { border-color: var(--bad); }
 .picker-grid .picker-item { flex-direction: column; text-align: center; padding: 8px 6px; }
 .picker-grid img { width: 72px; height: 72px; object-fit: contain; }
 .picker-wide img { width: 100%; height: 92px; object-fit: cover; border-radius: 4px; }
+.picker-icon { flex: none; width: 32px; height: 32px; object-fit: contain; }
 .picker-text { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
 .picker-name, .picker-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .picker-sub { font-size: 11.5px; color: var(--muted); }

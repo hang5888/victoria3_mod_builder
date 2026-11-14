@@ -55,3 +55,9 @@ export function nameOf(kind, key) {
   const item = store.index && store.index[kind].get(key);
   return (item && item.name) || key;
 }
+
+// Game path of an object's icon, or '' when it has none.
+export function iconOf(kind, key) {
+  const item = store.index && store.index[kind].get(key);
+  return (item && item.icon) || '';
+}
