@@ -1,5 +1,6 @@
 // State shared by all views: what the backend knows, and the loaded game data.
 import { api } from './api.js';
+import { t } from './i18n.js';
 
 export const store = {
   state: null,    // /api/state: settings, folder checks, load status, current project
@@ -55,6 +56,14 @@ export function dropData() {
 export function nameOf(kind, key) {
   const item = store.index && store.index[kind].get(key);
   return (item && item.name) || key;
+}
+
+// Name of a company in the project: its own name in the current language, else the game's
+// name of the company it overrides, else its English name or key.
+export function companyName(company) {
+  const original = company.mode === 'override' && store.index ? store.index.companies.get(company.key) : null;
+  return company.names[language()] || (original && original.name) || company.names.english
+    || company.key || t('company.unnamed');
 }
 
 // Game path of an object's icon, or '' when it has none.

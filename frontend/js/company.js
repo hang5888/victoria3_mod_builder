@@ -1,7 +1,9 @@
-// Company builder: the company being edited (left), the editor (middle), existing companies (right).
+// Company builder: the mod's contents (sidebar), the company being edited, the editor,
+// and the existing companies (right).
 import { api, textureUrl } from './api.js';
 import { t } from './i18n.js';
-import { store, refreshState, loadData, language, languageName, nameOf } from './store.js';
+import { store, refreshState, loadData, language, languageName, nameOf, companyName } from './store.js';
+import { renderSidebar, refreshSidebar } from './sidebar.js';
 import { h, fill, toast, errorText, confirmDialog, openPicker, debounce } from './ui.js';
 import { StateMap } from './map.js';
 import { ICON_KINDS, thumb, objectIcon, pickerIcon } from './icons.js';
@@ -86,10 +88,12 @@ export async function renderCompany(container) {
     aiMode = aiModeOf(editing);
     clearConditionCache();
   }
+  els.sidebar = h('aside', { class: 'col col-sidebar' });
   els.left = h('div', { class: 'col col-left' });
   els.middle = h('div', { class: 'col col-middle' });
   els.right = h('div', { class: 'col col-right' });
-  root.replaceChildren(h('div', { class: 'builder' }, els.left, els.middle, els.right));
+  root.replaceChildren(h('div', { class: 'builder' }, els.sidebar, els.left, els.middle, els.right));
+  renderSidebar(els.sidebar, sidebarEditor);
   renderLeft();
   renderMiddle();
   renderRight();
@@ -101,11 +105,7 @@ function originalOf(company) {
   return company.mode === 'override' ? store.index.companies.get(company.key) : null;
 }
 
-function displayName(company) {
-  const original = originalOf(company);
-  return company.names[language()] || (original && original.name) || company.names.english
-    || company.key || t('company.unnamed');
-}
+const displayName = companyName;
 
 function sourceName(id) {
   if (id === 'game') return t('company.source_game');
@@ -168,6 +168,7 @@ function changed() {
   if (aiMode === 'same') editing.blocks.ai_will_do = editing.blocks.possible.trim() || AI_ALWAYS;
   dirty = true;
   renderPreview();
+  refreshSidebar();
 }
 
 function refresh(name) {
@@ -220,40 +221,42 @@ async function save() {
   toast(t('company.saved', { dir: result.dir }));
 }
 
-async function remove() {
-  if (!(await confirmDialog(t('company.delete_confirm', { name: displayName(editing) }), t('company.delete')))) return;
-  store.project = await api.post('/api/project/company/delete', { key: originalKey });
-  dirty = false;
-  await edit(blankCompany(), null);
+// Remove a company of the project; when it is the one being edited, start a new one.
+async function remove(company) {
+  const current = company.key === originalKey;
+  const name = displayName(current ? editing : company);
+  if (!(await confirmDialog(t('company.delete_confirm', { name }), t('company.delete')))) return;
+  store.project = await api.post('/api/project/company/delete', { key: company.key });
+  if (current) {
+    dirty = false;
+    await edit(blankCompany(), null);
+  } else {
+    refreshSidebar();
+  }
   toast(t('company.deleted'));
 }
+
+// What the sidebar needs from this page.
+const sidebarEditor = {
+  kind: 'company',
+  state: () => ({ key: originalKey, dirty, editing }),
+  open: (company) => edit(company, company.key),
+  remove,
+  discard: () => edit(blankCompany(), null),
+  save,
+};
 
 // --------------------------------------------------------------------- left
 
 function renderLeft() {
-  const project = store.project;
   els.preview = h('div', { class: 'preview' });
   fill(els.left,
     h('div', { class: 'col-head' },
       h('h2', {}, t('company.editing')),
       h('button', { class: 'btn', onclick: () => run(() => edit(blankCompany(), null)) }, t('company.new'))),
-    els.preview,
-    h('div', { class: 'actions' },
-      h('button', { class: 'btn primary', onclick: () => run(save) }, t('company.save')),
-      originalKey && h('button', { class: 'btn danger', onclick: () => run(remove) }, t('company.delete'))),
-    h('h3', { class: 'list-title' }, t('company.in_project', { name: project.name, count: project.companies.length })),
-    project.companies.length === 0 && h('p', { class: 'muted' }, t('company.project_empty')),
-    h('div', { class: 'project-list' }, project.companies.map((company) =>
-      h('button', {
-        class: 'company-head' + (company.key === originalKey ? ' current' : ''),
-        onclick: () => run(() => edit(company, company.key)),
-      },
-        thumb(company.icon, 64, 'company-icon'),
-        h('span', { class: 'company-title' },
-          h('span', { class: 'company-name' }, displayName(company)),
-          h('span', { class: 'company-key' }, company.key)),
-        h('span', { class: 'badge' + (company.mode === 'override' ? ' accent' : '') }, t('company.mode.' + company.mode))))));
+    els.preview);
   renderPreview();
+  refreshSidebar();
 }
 
 function previewGroup(title, items, kind) {

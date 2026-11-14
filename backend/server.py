@@ -181,6 +181,17 @@ def browse_folder(initial):
     return result.stdout.strip()
 
 
+def open_folder(path):
+    """Show a folder in the system's file manager (only ever the current project's folder)."""
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)  # noqa: S606 - a folder we created, not user input
+        else:
+            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path])
+    except OSError:
+        raise ApiError("open_folder_failed", 500)
+
+
 # -------------------------------------------------------------------- routes
 
 def api_get(app, path, query):
@@ -252,6 +263,9 @@ def api_post(app, path, body):
             s["project_dir"] = target
             app.save_settings()
         return app.state()
+    if path == "/api/project/open_folder":
+        open_folder(app.require_project())
+        return {}
     if path == "/api/project/company":
         return save_company(app, body)
     if path == "/api/project/company/delete":

@@ -313,7 +313,8 @@ class InterfaceTextTest(unittest.TestCase):
                      "buildings_missing", "modifier_value", "braces"],
         "error.": ["offline", "server_error", "not_loaded", "no_project", "folders_invalid", "bad_request",
                    "not_found", "name_missing", "browse_unavailable", "bad_path", "unsupported_texture",
-                   "forbidden"],
+                   "forbidden", "open_folder_failed"],
+        "sidebar.category.": ["company"],
     }
 
     def test_keys(self):
