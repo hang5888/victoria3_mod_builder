@@ -104,6 +104,8 @@
   "version_note.shown": "This version differs from the one in effect.",
   "sidebar.title": "Mod contents",
   "sidebar.category.company": "Companies",
+  "sidebar.hide": "Hide the sidebar",
+  "sidebar.show": "Show the sidebar",
   "sidebar.collapse": "Collapse",
   "sidebar.expand": "Expand",
   "sidebar.empty": "Nothing yet.",

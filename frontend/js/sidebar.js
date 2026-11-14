@@ -16,7 +16,9 @@ const KINDS = {
   company: { items: (project) => project.companies, name: companyName, icon: (item) => item.icon },
 };
 
+// Collapsed categories, and '' when the whole sidebar is collapsed.
 const STORAGE_KEY = 'vmb.sidebar.collapsed';
+const SIDEBAR = '';
 const collapsed = loadCollapsed();
 let container = null;
 let editor = null;
@@ -59,8 +61,20 @@ export function renderSidebar(element, activeEditor) {
 export function refreshSidebar() {
   if (!container || !store.project) return;
   const state = editor.state();
+  const hidden = collapsed.has(SIDEBAR);
+  container.classList.toggle('collapsed', hidden);
+  if (container.parentElement) container.parentElement.classList.toggle('sidebar-collapsed', hidden);
+  if (hidden) {
+    // A thin strip; anywhere on it opens the sidebar again.
+    fill(container, h('button', { class: 'side-strip', title: t('sidebar.show'), onclick: () => toggle(SIDEBAR) },
+      h('span', { class: 'side-toggle' }, '»'),
+      h('span', { class: 'side-strip-title' }, t('sidebar.title')),
+      state.dirty && h('span', { class: 'side-dot', title: t('company.unsaved') })));
+    return;
+  }
   fill(container,
-    h('div', { class: 'col-head' }, h('h2', {}, t('sidebar.title'))),
+    h('div', { class: 'col-head' }, h('h2', {}, t('sidebar.title')),
+      h('button', { class: 'btn icon-btn side-toggle', title: t('sidebar.hide'), onclick: () => toggle(SIDEBAR) }, '«')),
     h('div', { class: 'muted small', title: store.state.project ? store.state.project.dir : '' }, store.project.name),
     Object.entries(KINDS).map(([kind, def]) => group(kind, def, state)),
     h('div', { class: 'actions sidebar-actions' },

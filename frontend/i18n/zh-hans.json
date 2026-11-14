@@ -104,6 +104,8 @@
   "version_note.shown": "这个版本与生效的版本不同。",
   "sidebar.title": "模组内容",
   "sidebar.category.company": "公司",
+  "sidebar.hide": "收起侧栏",
+  "sidebar.show": "展开侧栏",
   "sidebar.collapse": "收起",
   "sidebar.expand": "展开",
   "sidebar.empty": "还没有内容。",
