@@ -330,6 +330,29 @@ select.input { padding-right: 4px; }
 .modifier-value { width: 86px; text-align: right; }
 .modifier-effect { width: 74px; text-align: right; }
 
+.cond-block { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px solid var(--panel-2); }
+.cond-head { display: flex; align-items: baseline; gap: 8px; }
+.cond-editor { display: flex; flex-direction: column; gap: 6px; }
+.cond-rows { display: flex; flex-direction: column; gap: 4px; }
+.cond-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; background: var(--panel-2); border-radius: var(--radius); }
+.cond-row.raw { align-items: flex-start; }
+.cond-type { flex: none; width: 136px; color: var(--muted); font-size: 13px; }
+.cond-controls { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cond-controls textarea.script { flex: 1; }
+.cond-pick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; max-width: 100%; text-align: left; }
+.cond-pick.empty { color: var(--muted); border-style: dashed; }
+.cond-clear { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 2px 4px; margin-left: -4px; }
+.cond-clear:hover { color: var(--bad); }
+.cond-value { display: inline-flex; align-items: center; gap: 4px; }
+.cond-value .chip-icon { margin: -3px 0; }
+.cond-level { display: inline-flex; align-items: center; gap: 4px; }
+.cond-add { width: auto; }
+.cond-script summary, .template summary { cursor: pointer; color: var(--muted); font-size: 13px; padding: 2px 0; }
+.cond-script[open] summary { margin-bottom: 4px; }
+.template summary { color: var(--text); }
+.template .helper-label { flex: none; width: 150px; }
+.template[open] summary { margin-bottom: 4px; }
+.radios { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .helpers { display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--panel-2); border-radius: var(--radius); }
 .helper-label { min-width: 110px; color: var(--muted); }
 .input.level { width: 64px; }

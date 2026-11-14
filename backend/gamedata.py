@@ -1,5 +1,6 @@
 """Loading game data from the game folder plus the selected mods."""
 import os
+import re
 from pathlib import Path
 
 from . import pdx_script
@@ -8,6 +9,16 @@ from .localization import Localization, read_loc_file
 from .pdx_script import Block, INJECT_PREFIXES, split_prefix
 
 GAME_SOURCE = "game"
+# DLC features the game checks with has_dlc_feature (1.15.1). Scanning every script
+# file for them takes far too long, so this list is the base; features used by the
+# loaded companies are added to it.
+DLC_FEATURES = (
+    "agitators", "ep1_content", "ep1_cosmetics", "ep2_content", "foreign_investment", "ip2_content",
+    "ip3_content", "ip4_content", "ip5_content", "lobbies", "mp1_charter_companies", "mp1_content",
+    "mp1_prestige_goods", "mp1_treaties", "power_bloc_features", "regional_exile_pools", "rp1_content",
+    "ship_designer", "subject_and_bloc_actions", "voice_of_the_people_content", "voice_of_the_people_preorder",
+)
+_DLC_FEATURE = re.compile(r"has_dlc_feature\s*=\s*([A-Za-z0-9_]+)")
 COMPANY_ICON_DIR = "gfx/interface/icons/company_icons"
 COMPANY_BACKGROUND_DIR = "gfx/interface/icons/company_icons/company_backgrounds"
 # Categories that exist even when no loaded company happens to use them.
@@ -159,11 +170,13 @@ class GameData:
 
     def _load_companies(self):
         self.companies = {}
+        self.dlc_features = set(DLC_FEATURES)
         for key, (block, source, rel_name) in self.load_db("common/company_types").items():
             company = company_from_block(key, block)
             company["source"] = source.id
             company["file"] = rel_name
             self.companies[key] = company
+            self.dlc_features.update(_DLC_FEATURE.findall(block.text[block.start:block.end]))
 
     def _load_buildings(self):
         groups = self.load_db("common/building_groups")
@@ -212,6 +225,13 @@ class GameData:
             texture = block.get("texture")
             self.prestige_goods[key] = {"base": base if isinstance(base, str) else "",
                                         "icon": texture if isinstance(texture, str) else ""}
+        self.technologies = {}
+        for key, (block, _source, _file) in self.load_db("common/technology/technologies").items():
+            texture, era = block.get("texture"), block.get("era")
+            era_number = era.rpartition("_")[2] if isinstance(era, str) else ""  # era_3 -> 3 (eras have no names)
+            self.technologies[key] = {"icon": texture if isinstance(texture, str) else "",
+                                      "era": int(era_number) if era_number.isdigit() else 0}
+        self.cultures = list(self.load_db("common/cultures"))
 
     def _load_textures(self):
         suffixes = (".dds", ".png")  # some mods ship .png icons
@@ -286,6 +306,10 @@ class GameData:
             "prestige_goods": [{"key": key, "name": loc.name(key), "icon": good["icon"],
                                 "good_name": loc.name(good["base"]) if good["base"] else ""}
                                for key, good in self.prestige_goods.items()],
+            "technologies": [{"key": key, "name": loc.name(key), "icon": tech["icon"], "era": tech["era"]}
+                             for key, tech in self.technologies.items()],
+            "cultures": [{"key": key, "name": loc.name(key)} for key in self.cultures],
+            "dlc_features": sorted(self.dlc_features),
             "categories": [{"key": c, "name": loc.name(f"company_category_{c}")} for c in categories],
             "default_category_name": loc.name("company_category_capitalist_owned"),
             "icons": self.icons,

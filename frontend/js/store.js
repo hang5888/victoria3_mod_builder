@@ -28,7 +28,8 @@ export function languageName(key) {
   return found ? found.name : key;
 }
 
-const INDEXED = ['companies', 'buildings', 'modifiers', 'states', 'regions', 'countries', 'prestige_goods', 'categories'];
+const INDEXED = ['companies', 'buildings', 'modifiers', 'states', 'regions', 'countries', 'prestige_goods', 'categories',
+  'technologies', 'cultures'];
 
 // Game data for the current language, or null when nothing is loaded yet.
 export async function loadData() {

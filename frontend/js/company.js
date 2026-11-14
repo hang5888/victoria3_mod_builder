@@ -1,15 +1,19 @@
 // Company builder: the company being edited (left), the editor (middle), existing companies (right).
 import { api, textureUrl } from './api.js';
 import { t } from './i18n.js';
-import { store, refreshState, loadData, language, languageName, nameOf, iconOf } from './store.js';
+import { store, refreshState, loadData, language, languageName, nameOf } from './store.js';
 import { h, fill, toast, errorText, confirmDialog, openPicker, debounce } from './ui.js';
 import { StateMap } from './map.js';
+import { ICON_KINDS, thumb, objectIcon, pickerIcon } from './icons.js';
+import { parseScript, bracesBalanced } from './script.js';
+import { COUNTRY_KINDS, STATE_KINDS, TARGET_KINDS, conditionEditor, clearConditionCache, countConditions,
+  newRow, writeConditions, valueButton } from './conditions.js';
 
-// Script blocks edited as text, in the order they are shown.
+// Script blocks of a company (written in this order by the backend).
 const RAW_BLOCKS = ['potential', 'attainable', 'possible', 'can_establish_in', 'prestige_goods_trigger',
   'ai_will_do', 'ai_construction_targets', 'ai_weight'];
-// Country-scope triggers the "insert condition" helpers can write into.
-const HELPER_TARGETS = ['potential', 'attainable', 'possible', 'ai_will_do'];
+const CONDITION_BLOCKS = ['potential', 'attainable', 'possible', 'can_establish_in'];
+const AI_ALWAYS = 'always = yes';
 const FIELDS = ['key', 'mode', 'names', 'flavored_company', 'prosperity_modifier', 'blocks', 'extra',
   'building_types', 'extension_building_types', 'possible_prestige_goods', 'preferred_headquarters',
   'icon', 'background', 'category'];
@@ -29,7 +33,8 @@ const filters = { query: '', source: '', building: '', region: '' };
 let listed = [];           // existing companies in the order they are listed
 let listLimit = PAGE;
 let expanded = null;
-const helper = { target: 'possible', state: '', building: '', level: '5' };
+let aiMode = 'same';       // ai_will_do: 'same' as possible, 'custom' or 'never'
+const template = { state: '', region: '', tech: '', buildings: null, level: '5', open: false };
 const els = {};
 const sections = {};
 
@@ -49,7 +54,7 @@ async function run(action) {
 function blankCompany() {
   return {
     key: '', mode: 'new', names: {}, flavored_company: true, prosperity_modifier: [],
-    blocks: Object.fromEntries(RAW_BLOCKS.map((name) => [name, ''])), extra: '',
+    blocks: { ...Object.fromEntries(RAW_BLOCKS.map((name) => [name, ''])), ai_will_do: AI_ALWAYS }, extra: '',
     building_types: [], extension_building_types: [], possible_prestige_goods: [],
     preferred_headquarters: [], icon: '', background: '', category: '',
   };
@@ -77,6 +82,8 @@ export async function renderCompany(container) {
     originalKey = null;
     dirty = false;
     editingProject = store.state.project.dir;
+    aiMode = aiModeOf(editing);
+    clearConditionCache();
   }
   els.left = h('div', { class: 'col col-left' });
   els.middle = h('div', { class: 'col col-middle' });
@@ -108,21 +115,6 @@ function sourceName(id) {
 function keyTaken(key) {
   return store.index.companies.has(key)
     || store.project.companies.some((c) => c.key === key && c.key !== originalKey);
-}
-
-function bracesBalanced(text) {
-  let depth = 0;
-  for (const line of text.split('\n')) {
-    let quoted = false;
-    for (const char of line) {
-      if (char === '"') quoted = !quoted;
-      else if (quoted) continue;
-      else if (char === '#') break;
-      else if (char === '{') depth++;
-      else if (char === '}' && --depth < 0) return false;
-    }
-  }
-  return depth === 0;
 }
 
 // Same checks as the backend, so problems show up while typing.
@@ -158,36 +150,21 @@ function formatModifier(modifier) {
   return { text, tone };
 }
 
-function thumb(path, size, className) {
-  if (!path) return h('div', { class: `${className} empty` });
-  return h('img', { class: className, loading: 'lazy', alt: '', src: textureUrl(path, size),
-    onerror: (event) => event.target.classList.add('broken') });
-}
-
-// Kinds of game objects that have their own small icon.
-const ICON_KINDS = new Set(['buildings', 'prestige_goods']);
-const ICON_SIZE = 64;
-
-// The object's small icon, or null when it has none.
-function objectIcon(kind, key) {
-  const path = iconOf(kind, key);
-  return path ? thumb(path, ICON_SIZE, 'chip-icon') : null;
-}
-
-// Icon option for openPicker; null for kinds without icons.
-function pickerIcon(kind) {
-  if (!ICON_KINDS.has(kind)) return null;
-  return (item) => {
-    const path = iconOf(kind, item.key);
-    return path ? textureUrl(path, ICON_SIZE) : '';
-  };
-}
-
 function objectChip(kind, key, ...extra) {
   return h('span', { class: 'chip', title: key }, objectIcon(kind, key), nameOf(kind, key), extra);
 }
 
+const squash = (text) => text.replace(/\s+/g, ' ').trim();
+
+// How ai_will_do relates to possible: the same conditions, its own, or empty (the AI never founds it).
+function aiModeOf(company) {
+  const ai = squash(company.blocks.ai_will_do);
+  if (!ai) return 'never';
+  return ai === (squash(company.blocks.possible) || AI_ALWAYS) ? 'same' : 'custom';
+}
+
 function changed() {
+  if (aiMode === 'same') editing.blocks.ai_will_do = editing.blocks.possible.trim() || AI_ALWAYS;
   dirty = true;
   renderPreview();
 }
@@ -205,6 +182,9 @@ async function edit(company, key, isDirty = false) {
   editing = modelOf(company);
   originalKey = key;
   dirty = isDirty;
+  aiMode = aiModeOf(editing);
+  clearConditionCache();
+  template.buildings = null;  // follow the new company's building types
   renderLeft();
   renderMiddle();
   els.middle.scrollTop = 0;
@@ -291,7 +271,15 @@ function renderPreview() {
   if (company.mode === 'new' && !Object.values(company.names).some(Boolean)) notes.push(t('note.no_name'));
   const category = company.category ? nameOf('categories', company.category) : store.data.default_category_name;
   const filled = store.state.languages.filter((l) => company.names[l.key]);
-  const blocks = RAW_BLOCKS.filter((name) => company.blocks[name].trim());
+  const conditionChips = CONDITION_BLOCKS.filter((name) => company.blocks[name].trim()).map((name) =>
+    h('span', { class: 'chip', title: name }, `${t('block.title.' + name)} · ${countConditions(company.blocks[name])}`));
+  const weight = aiWeightOf(company);
+  const targets = countConditions(company.blocks.ai_construction_targets);
+  const aiChips = [
+    h('span', { class: 'chip' }, t('ai.mode.' + aiMode)),
+    weight !== null && weight !== '' && h('span', { class: 'chip' }, t('ai.weight_short', { value: weight })),
+    targets > 0 && h('span', { class: 'chip' }, t('ai.targets_short', { count: targets })),
+  ];
   fill(els.preview,
     h('div', { class: 'preview-art' },
       thumb(company.background, 480, 'preview-background'),
@@ -317,9 +305,12 @@ function renderPreview() {
     previewGroup(t('company.headquarters'), company.preferred_headquarters, 'states'),
     h('div', { class: 'preview-group' },
       h('h4', {}, t('company.conditions')),
-      blocks.length
-        ? h('div', { class: 'chips' }, blocks.map((name) => h('span', { class: 'chip mono' }, name)))
-        : h('span', { class: 'muted' }, t('common.none'))),
+      conditionChips.length
+        ? h('div', { class: 'chips' }, conditionChips)
+        : h('span', { class: 'muted' }, t('company.no_conditions'))),
+    h('div', { class: 'preview-group' },
+      h('h4', {}, t('company.ai')),
+      h('div', { class: 'chips' }, aiChips)),
     h('div', { class: 'preview-group' },
       h('h4', {}, t('company.translations', { count: filled.length, total: store.state.languages.length })),
       h('div', { class: 'chips' }, store.state.languages.map((l) =>
@@ -437,8 +428,13 @@ function buildingsSection() {
 }
 
 function prestigeSection() {
+  const company = editing;
   return section(t('company.prestige'), null,
-    chipField('possible_prestige_goods', 'prestige_goods', t('company.prestige_goods'), t('company.prestige_goods_hint'), 'prestige'));
+    chipField('possible_prestige_goods', 'prestige_goods', t('company.prestige_goods'), t('company.prestige_goods_hint'), 'prestige'),
+    h('details', { class: 'cond-script', open: Boolean(company.blocks.prestige_goods_trigger.trim()) },
+      h('summary', {}, t('block.title.prestige_goods_trigger')),
+      h('p', { class: 'muted small' }, t('block.prestige_goods_trigger')),
+      scriptArea(() => company.blocks.prestige_goods_trigger, (value) => { company.blocks.prestige_goods_trigger = value; })));
 }
 
 function modifiersSection() {
@@ -521,60 +517,148 @@ function headquartersSection() {
     chipField('preferred_headquarters', 'states', t('company.headquarters_states'), null, 'headquarters'));
 }
 
-function insertCondition(text) {
-  const current = editing.blocks[helper.target].replace(/\s+$/, '');
-  editing.blocks[helper.target] = current ? `${current}\n${text}` : text;
-  changed();
-  refresh('conditions');
+// ------------------------------------------------------------- conditions
+
+function blockHead(name) {
+  return h('div', { class: 'cond-head' },
+    h('span', { class: 'field-label' }, t('block.title.' + name)),
+    h('span', { class: 'mono muted small' }, name));
 }
 
-function conditionHelpers() {
-  const pickOne = (kind, name, title) => openPicker({
-    title, multi: false, selected: helper[name] ? [helper[name]] : [], icon: pickerIcon(kind),
-    items: store.data[kind].filter((item) => !item.sea).map((item) => ({
-      key: item.key, name: item.name || item.key, sub: item.group_name || item.key })),
-    onDone: ([key]) => { helper[name] = key; refresh('conditions'); },
-  });
-  const countries = () => openPicker({
-    title: t('helper.country'),
-    items: store.data.countries.map((c) => ({ key: c.key, name: c.name || c.key, sub: c.key })),
-    onDone: (tags) => {
-      if (tags.length === 1) insertCondition(`c:${tags[0]} ?= this`);
-      else if (tags.length > 1) insertCondition(`OR = {\n${tags.map((tag) => `\tc:${tag} ?= this`).join('\n')}\n}`);
+// A list of conditions editing one script block of the company.
+function blockEditor(name, kinds, hideOption = false) {
+  const company = editing;
+  return h('div', { class: 'cond-block' },
+    blockHead(name),
+    h('p', { class: 'muted small' }, t('block.' + name)),
+    conditionEditor({
+      id: name, kinds, hideOption,
+      get: () => company.blocks[name],
+      set: (text) => { company.blocks[name] = text; changed(); },
+    }));
+}
+
+// ai_weight as a plain number: '' when empty, null when it is more than `value = n`.
+function aiWeightOf(company) {
+  const text = company.blocks.ai_weight.trim();
+  if (!text) return '';
+  const entries = parseScript(text);
+  const only = entries && entries.length === 1 ? entries[0] : null;
+  return only && only.key === 'value' && only.op === '=' && /^-?\d+(\.\d+)?$/.test(only.value) ? only.value : null;
+}
+
+// Fill in everything the way the base game writes a company tied to one state region.
+async function applyTemplate() {
+  const company = editing;
+  const buildings = template.buildings || company.building_types;
+  if (!template.state) return toast(t('template.need_state'), 'error');
+  const replaces = aiMode === 'custom'
+    || ['potential', 'attainable', 'possible', 'ai_construction_targets'].some((name) => company.blocks[name].trim());
+  if (replaces && !(await confirmDialog(t('template.confirm'), t('template.apply')))) return;
+  const { state, region, level } = template;
+  const tech = template.tech ? [newRow('tech', { tech: template.tech })] : [];
+  company.blocks.potential = region ? writeConditions({ rows: [newRow('interest', { regions: [region] })] }) : '';
+  // Hidden: the game would only repeat what possible already says.
+  company.blocks.attainable = writeConditions({ hidden: true, rows: [newRow('state', { state, incorporated: false })] });
+  company.blocks.possible = writeConditions({ rows: [...tech, buildings.length
+    ? newRow('building', { state, buildings: [...buildings], level })
+    : newRow('state', { state })] });
+  // The AI starts working towards the company once it owns the state, then builds up the buildings.
+  company.blocks.ai_will_do = writeConditions({ rows: [...tech, newRow('state', { state })] });
+  aiMode = 'custom';
+  company.blocks.ai_construction_targets = writeConditions({
+    rows: buildings.map((building) => newRow('target', { building, level, state })) });
+  if (!company.blocks.ai_weight.trim()) company.blocks.ai_weight = 'value = 3';
+  if (!company.preferred_headquarters.includes(state)) company.preferred_headquarters.push(state);
+  clearConditionCache();
+  changed();
+  for (const name of ['conditions', 'ai', 'headquarters']) refresh(name);
+  toast(t('template.applied'));
+}
+
+function templateCard() {
+  const buildings = template.buildings || editing.building_types;
+  const field = (label, ...controls) => h('div', { class: 'row' }, h('span', { class: 'helper-label' }, label), controls);
+  const one = (name, kind, placeholder) => [
+    valueButton({
+      kind, title: t('template.' + name), placeholder, keys: template[name] ? [template[name]] : [],
+      onDone: ([key]) => {
+        template[name] = key || '';
+        const info = name === 'state' && store.index.states.get(template.state);
+        if (info && info.region) template.region = info.region;  // the state's own strategic region
+        refresh('conditions');
+      },
+    }),
+    template[name] && h('button', { class: 'cond-clear', title: t('cond.clear'),
+      onclick: () => { template[name] = ''; refresh('conditions'); } }, '✕'),
+  ];
+  const level = h('input', { class: 'input level', type: 'number', min: '1', value: template.level,
+    oninput: () => { template.level = level.value; } });
+  return h('details', { class: 'helpers template', open: template.open,
+    ontoggle: (event) => { template.open = event.target.open; } },
+    h('summary', {}, h('b', {}, t('template.title'))),
+    h('p', { class: 'muted small' }, t('template.hint')),
+    field(t('template.state'), one('state', 'states')),
+    field(t('template.region'), one('region', 'regions')),
+    field(t('template.tech'), one('tech', 'technologies', t('template.optional'))),
+    field(t('template.buildings'),
+      valueButton({
+        kind: 'buildings', multi: true, title: t('template.buildings'), keys: buildings,
+        onDone: (keys) => { template.buildings = keys; refresh('conditions'); },
+      }),
+      h('span', { class: 'muted' }, t('cond.level')), level),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn primary', onclick: () => run(applyTemplate) }, t('template.apply'))));
+}
+
+function conditionsSection() {
+  return section(t('company.conditions'), t('company.conditions_hint'),
+    templateCard(),
+    blockEditor('potential', COUNTRY_KINDS),
+    blockEditor('attainable', COUNTRY_KINDS, true),
+    blockEditor('possible', COUNTRY_KINDS),
+    blockEditor('can_establish_in', STATE_KINDS));
+}
+
+function aiSection() {
+  const company = editing;
+  const setMode = (mode) => {
+    aiMode = mode;
+    if (mode === 'never') company.blocks.ai_will_do = '';
+    // custom starts from what the AI used so far: a copy of possible
+    else if (mode === 'custom' && !company.blocks.ai_will_do.trim()) company.blocks.ai_will_do = company.blocks.possible;
+    changed();  // 'same' copies possible here
+    refresh('ai');
+  };
+  const weight = aiWeightOf(company);
+  const weightInput = h('input', {
+    class: 'input level', type: 'number', step: 'any', value: weight || '',
+    oninput: () => {
+      const value = weightInput.value.trim();
+      company.blocks.ai_weight = value ? `value = ${value}` : '';
+      changed();
     },
   });
-  const level = h('input', { class: 'input level', type: 'number', min: '1', value: helper.level,
-    oninput: () => { helper.level = level.value; } });
-  const insertBuilding = () => {
-    const levels = Math.max(1, parseInt(helper.level, 10) || 1);
-    if (!helper.building) return toast(t('helper.need_building'), 'error');
-    if (helper.state) {
-      insertCondition('has_building_levels_in_state_region = {\n'
-        + `\tregion = ${helper.state}\n\tbuilding = ${helper.building}\n\tlevels >= ${levels}\n}`);
-    } else {
-      insertCondition('any_scope_state = {\n\tany_scope_building = {\n'
-        + `\t\tis_building_type = ${helper.building}\n\t\tlevel >= ${levels}\n\t}\n}`);
-    }
-  };
-  const target = h('select', { class: 'input mono', onchange: () => { helper.target = target.value; } },
-    HELPER_TARGETS.map((name) => h('option', { value: name }, name)));
-  target.value = helper.target;
-  return h('div', { class: 'helpers' },
-    h('div', { class: 'row' }, h('b', {}, t('helper.title')), h('span', {}, t('helper.target')), target),
-    h('div', { class: 'row' },
-      h('span', { class: 'helper-label' }, t('helper.country')),
-      h('button', { class: 'btn', onclick: countries }, t('helper.pick_countries'))),
-    h('div', { class: 'row' },
-      h('span', { class: 'helper-label' }, t('helper.building_level')),
-      h('button', { class: 'btn', onclick: () => pickOne('buildings', 'building', t('helper.building')) },
-        helper.building ? [objectIcon('buildings', helper.building), nameOf('buildings', helper.building)]
-          : t('helper.building')),
-      h('span', {}, '≥'), level,
-      h('button', { class: 'btn', onclick: () => pickOne('states', 'state', t('helper.state')) },
-        helper.state ? nameOf('states', helper.state) : t('helper.any_state')),
-      helper.state && h('button', { class: 'btn icon-btn', title: t('common.remove'),
-        onclick: () => { helper.state = ''; refresh('conditions'); } }, '✕'),
-      h('button', { class: 'btn primary', onclick: insertBuilding }, t('helper.insert'))));
+  return section(t('company.ai'), null,
+    h('div', { class: 'cond-block' },
+      blockHead('ai_will_do'),
+      h('div', { class: 'radios' }, ['same', 'custom', 'never'].map((mode) => h('label', { class: 'check' },
+        h('input', { type: 'radio', name: 'ai-mode', checked: aiMode === mode, onchange: () => setMode(mode) }),
+        t('ai.mode.' + mode)))),
+      h('p', { class: 'muted small' }, t('ai.mode_hint.' + aiMode)),
+      aiMode === 'custom' && conditionEditor({
+        id: 'ai_will_do', kinds: COUNTRY_KINDS,
+        get: () => company.blocks.ai_will_do,
+        set: (text) => { company.blocks.ai_will_do = text; changed(); },
+      })),
+    h('div', { class: 'cond-block' },
+      blockHead('ai_weight'),
+      h('p', { class: 'muted small' }, t('block.ai_weight')),
+      weight === null
+        ? [h('p', { class: 'notice warn' }, t('ai.weight_script')),
+          scriptArea(() => company.blocks.ai_weight, (value) => { company.blocks.ai_weight = value; })]
+        : weightInput),
+    blockEditor('ai_construction_targets', TARGET_KINDS));
 }
 
 function scriptArea(get, set) {
@@ -597,21 +681,9 @@ function scriptArea(get, set) {
   return area;
 }
 
-function conditionsSection() {
+function advancedSection() {
   const company = editing;
-  const copyToAi = () => {
-    company.blocks.ai_will_do = company.blocks.possible;
-    changed();
-    refresh('conditions');
-  };
-  return section(t('company.conditions'), t('company.conditions_hint'),
-    conditionHelpers(),
-    RAW_BLOCKS.map((name) => h('div', { class: 'script-field' },
-      h('div', { class: 'row' },
-        h('span', { class: 'field-label mono' }, name),
-        name === 'ai_will_do' && h('button', { class: 'btn small', onclick: copyToAi }, t('company.copy_possible'))),
-      h('p', { class: 'muted small' }, t('block.' + name)),
-      scriptArea(() => company.blocks[name], (value) => { company.blocks[name] = value; }))),
+  return section(t('company.advanced'), null,
     h('div', { class: 'script-field' },
       h('span', { class: 'field-label' }, t('company.extra')),
       h('p', { class: 'muted small' }, t('company.extra_hint')),
@@ -626,6 +698,8 @@ const builders = {
   modifiers: modifiersSection,
   headquarters: headquartersSection,
   conditions: conditionsSection,
+  ai: aiSection,
+  advanced: advancedSection,
 };
 
 function renderMiddle() {
@@ -712,7 +786,15 @@ function renderRight() {
   listed = [...data.companies].sort((a, b) => rank.get(a.source) - rank.get(b.source));
   const sources = data.sources.filter((s) => counts.has(s.id)).map((s) => [s.id, `${sourceName(s.id)} (${counts.get(s.id)})`]);
   const buildings = data.buildings.filter((b) => b.used).map((b) => [b.key, b.name || b.key]).sort(byName);
-  const regions = data.regions.map((r) => [r.key, r.name || r.key]).sort(byName);
+  // Only regions where some company has its headquarters, with how many companies.
+  const regionCounts = new Map();
+  for (const company of data.companies) {
+    const regions = new Set(company.preferred_headquarters.map((state) => store.index.states.get(state))
+      .filter(Boolean).map((info) => info.region).filter(Boolean));
+    for (const region of regions) regionCounts.set(region, (regionCounts.get(region) || 0) + 1);
+  }
+  const regions = data.regions.filter((r) => regionCounts.has(r.key))
+    .map((r) => [r.key, `${r.name || r.key} (${regionCounts.get(r.key)})`]).sort(byName);
   els.list = h('div', { class: 'company-list' });
   els.count = h('span', { class: 'muted' });
   const search = h('input', {
