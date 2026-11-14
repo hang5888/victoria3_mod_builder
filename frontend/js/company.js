@@ -29,7 +29,7 @@ let dirty = false;
 let hqMap = null;
 let hqMapData = null;
 let showMarkers = true;
-const filters = { query: '', source: '', building: '', region: '' };
+const filters = { query: '', source: '', building: '', region: '', prestige: '' };
 let listed = [];           // existing companies in the order they are listed
 let listLimit = PAGE;
 let expanded = null;
@@ -721,6 +721,7 @@ function matchesFilters(company) {
     const info = store.index.states.get(state);
     return info && info.region === filters.region;
   })) return false;
+  if (filters.prestige && (company.possible_prestige_goods.length > 0) !== (filters.prestige === 'yes')) return false;
   return true;
 }
 
@@ -795,6 +796,9 @@ function renderRight() {
   }
   const regions = data.regions.filter((r) => regionCounts.has(r.key))
     .map((r) => [r.key, `${r.name || r.key} (${regionCounts.get(r.key)})`]).sort(byName);
+  const withPrestige = data.companies.filter((c) => c.possible_prestige_goods.length > 0).length;
+  const prestige = [['yes', t('company.filter_prestige_yes', { count: withPrestige })],
+    ['no', t('company.filter_prestige_no', { count: data.companies.length - withPrestige })]];
   els.list = h('div', { class: 'company-list' });
   els.count = h('span', { class: 'muted' });
   const search = h('input', {
@@ -807,7 +811,8 @@ function renderRight() {
       search,
       filterSelect('source', t('company.filter_source'), sources),
       filterSelect('building', t('company.filter_building'), buildings),
-      filterSelect('region', t('company.filter_region'), regions)),
+      filterSelect('region', t('company.filter_region'), regions),
+      filterSelect('prestige', t('company.filter_prestige'), prestige)),
     els.list);
   renderList();
 }
