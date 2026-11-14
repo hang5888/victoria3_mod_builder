@@ -137,13 +137,20 @@ class GameData:
 
     # ------------------------------------------------------------ database
 
-    def load_db(self, rel_dir):
+    def load_db(self, rel_dir, origins=None):
         """Read every definition in a folder into {key: (Block, Source, file name)}.
 
         REPLACE-style prefixes and plain redefinitions replace the earlier
-        definition; INJECT-style prefixes add their statements to it.
+        definition; INJECT-style prefixes add their statements to it. If
+        `origins` is a dict, it gets {key: [source ids]}: every source that
+        defines, replaces or injects into the key, in load order.
         """
         db = {}
+
+        def touched(key, source):
+            if origins is not None and key in db and source.id not in origins.setdefault(key, []):
+                origins[key].append(source.id)
+
         for source, path, rel_name in self.fs.list_files(rel_dir, ".txt"):
             try:
                 root = pdx_script.parse(read_text(path))
@@ -157,8 +164,10 @@ class GameData:
                 if prefix in INJECT_PREFIXES:
                     if key in db:
                         db[key][0].entries.extend(entry.value.entries)
+                        touched(key, source)
                     elif prefix == "INJECT_OR_CREATE":
                         db[key] = (entry.value, source, rel_name)
+                        touched(key, source)
                     elif prefix == "INJECT":
                         self.warnings.append(f"{source.name}: {rel_dir}/{rel_name}: INJECT target {key} not found")
                 elif prefix in ("REPLACE", "TRY_REPLACE") and key not in db:
@@ -166,14 +175,17 @@ class GameData:
                         self.warnings.append(f"{source.name}: {rel_dir}/{rel_name}: REPLACE target {key} not found")
                 else:
                     db[key] = (entry.value, source, rel_name)
+                    touched(key, source)
         return db
 
     def _load_companies(self):
         self.companies = {}
         self.dlc_features = set(DLC_FEATURES)
-        for key, (block, source, rel_name) in self.load_db("common/company_types").items():
+        origins = {}
+        for key, (block, source, rel_name) in self.load_db("common/company_types", origins).items():
             company = company_from_block(key, block)
-            company["source"] = source.id
+            company["source"] = source.id  # the definition in effect
+            company["sources"] = origins[key]  # every source that defines or changes it
             company["file"] = rel_name
             self.companies[key] = company
             self.dlc_features.update(_DLC_FEATURE.findall(block.text[block.start:block.end]))

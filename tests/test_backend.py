@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 from backend import project  # noqa: E402
 from backend.companies import (company_from_block, company_to_script, empty_company,  # noqa: E402
                                normalize_company, validate_company)
+from backend.gamedata import FileSystem, GameData, Source  # noqa: E402
 from backend.localization import Localization, read_loc_file, read_loc_text  # noqa: E402
 from backend.mods import PROJECT_FILE  # noqa: E402
 from backend.pdx_script import braces_balanced, parse, split_prefix  # noqa: E402
@@ -177,6 +178,29 @@ class TextureTest(unittest.TestCase):
 
     def test_bc7_reserved_mode(self):
         self.assertEqual(_bc7_block(bytes(16)), [(0, 0, 0, 0)] * 16)
+
+
+class LoadDbTest(unittest.TestCase):
+    def test_origins_list_every_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            files = {
+                "game/common/company_types/00_base.txt": "company_a = { icon = a }\ncompany_b = { icon = b }\n",
+                "mod1/common/company_types/zz_mod1.txt": "company_a = { icon = a2 }\nINJECT:company_b = { x = y }\n",
+                "mod2/common/company_types/zz_mod2.txt": "company_c = { icon = c }\n",
+            }
+            for rel, text in files.items():
+                path = Path(tmp) / rel
+                path.parent.mkdir(parents=True)
+                path.write_text(text, encoding="utf-8")
+            data = GameData.__new__(GameData)
+            data.fs = FileSystem([Source(name, name, Path(tmp) / name, "mod") for name in ("game", "mod1", "mod2")])
+            data.warnings = []
+            origins = {}
+            db = data.load_db("common/company_types", origins)
+            self.assertEqual(db["company_a"][1].id, "mod1")
+            self.assertEqual(db["company_b"][1].id, "game")  # injected into, still the base definition
+            self.assertEqual(origins, {"company_a": ["game", "mod1"], "company_b": ["game", "mod1"],
+                                       "company_c": ["mod2"]})
 
 
 class ProjectTest(unittest.TestCase):

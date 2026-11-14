@@ -714,7 +714,7 @@ function renderMiddle() {
 function matchesFilters(company) {
   const query = filters.query.trim().toLowerCase();
   if (query && !(company.name || '').toLowerCase().includes(query) && !company.key.toLowerCase().includes(query)) return false;
-  if (filters.source && company.source !== filters.source) return false;
+  if (filters.source && !company.sources.includes(filters.source)) return false;
   if (filters.building && !company.building_types.includes(filters.building)
     && !company.extension_building_types.includes(filters.building)) return false;
   if (filters.region && !company.preferred_headquarters.some((state) => {
@@ -741,9 +741,25 @@ function companyDetails(company) {
         return h('li', {}, h('b', { class: tone }, text), ' ', nameOf('modifiers', modifier.key));
       })),
     h('div', { class: 'muted small' }, `${sourceName(company.source)} · ${company.file}`),
+    company.sources.length > 1 && h('div', { class: 'muted small' }, t('company.also_in', {
+      sources: company.sources.filter((id) => id !== company.source).map(sourceName).join(', '),
+    })),
     h('div', { class: 'row' },
       h('button', { class: 'btn', onclick: () => run(() => overrideCompany(company)) }, t('company.override')),
       h('button', { class: 'btn', onclick: () => run(() => copyCompany(company)) }, t('company.copy'))));
+}
+
+// A tag for every source that defines or changes the company; none for a base game only company.
+// The definition in effect is the strong one.
+function sourceBadges(company) {
+  if (company.sources.length === 1 && company.source === 'game') return null;
+  return h('span', { class: 'badges' }, company.sources.map((id) => {
+    const active = id === company.source && company.sources.length > 1;
+    return h('span', {
+      class: 'badge source' + (id === company.source ? '' : ' faded'),
+      title: active ? t('company.source_active', { source: sourceName(id) }) : sourceName(id),
+    }, sourceName(id));
+  }));
 }
 
 function renderList() {
@@ -756,7 +772,7 @@ function renderList() {
         h('span', { class: 'company-title' },
           h('span', { class: 'company-name' }, company.name || company.key),
           h('span', { class: 'company-key' }, company.key)),
-        company.source !== 'game' && h('span', { class: 'badge source', title: sourceName(company.source) }, sourceName(company.source))),
+        sourceBadges(company)),
       open && companyDetails(company));
   });
   if (matches.length > listLimit) {
@@ -781,10 +797,13 @@ function renderRight() {
   const data = store.data;
   const byName = (a, b) => a[1].localeCompare(b[1]);
   const counts = new Map();
-  for (const company of data.companies) counts.set(company.source, (counts.get(company.source) || 0) + 1);
-  // Base game first, then the mods in load order (the data comes in file name order).
+  for (const company of data.companies) {
+    for (const id of company.sources) counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  // Base game first, then the mods in load order (the data comes in file name order),
+  // each company where it was first defined.
   const rank = new Map(data.sources.map((source, i) => [source.id, i]));
-  listed = [...data.companies].sort((a, b) => rank.get(a.source) - rank.get(b.source));
+  listed = [...data.companies].sort((a, b) => rank.get(a.sources[0]) - rank.get(b.sources[0]));
   const sources = data.sources.filter((s) => counts.has(s.id)).map((s) => [s.id, `${sourceName(s.id)} (${counts.get(s.id)})`]);
   const buildings = data.buildings.filter((b) => b.used).map((b) => [b.key, b.name || b.key]).sort(byName);
   // Only regions where some company has its headquarters, with how many companies.

@@ -96,6 +96,8 @@
   "company.go_home": "Go to the home page",
   "company.unnamed": "(unnamed company)",
   "company.source_game": "Base game",
+  "company.source_active": "{source} (the definition in effect)",
+  "company.also_in": "Also defined or changed in: {sources}",
   "company.editing": "Editing",
   "company.new": "New company",
   "company.save": "Save to mod",

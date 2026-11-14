@@ -130,6 +130,8 @@ select.input { padding-right: 4px; }
 .badge.accent { color: var(--accent); border-color: var(--accent); }
 .badge.warn { color: var(--warn); border-color: var(--warn); }
 .badge.source { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+.badge.faded { opacity: 0.55; }
+.badges { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex: none; }
 
 .notice {
   padding: 8px 12px;

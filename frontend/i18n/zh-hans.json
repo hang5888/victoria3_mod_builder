@@ -96,6 +96,8 @@
   "company.go_home": "前往首页",
   "company.unnamed": "（未命名公司）",
   "company.source_game": "游戏本体",
+  "company.source_active": "{source}（当前生效的定义）",
+  "company.also_in": "也定义或修改于：{sources}",
   "company.editing": "正在编辑",
   "company.new": "新公司",
   "company.save": "保存到模组",
