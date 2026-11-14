@@ -6,7 +6,7 @@
 
 | 模組類型 | 文件 | 狀態 |
 | --- | --- | --- |
-| 公司 | [docs/mod_types/company.md](docs/mod_types/company.md) | 初版已實作 |
+| 公司 | [mod_types/company.md](mod_types/company.md) | 初版已實作 |
 | 其他類型 | 待規劃 | |
 
 ## 1. 專案概述
