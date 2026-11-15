@@ -344,10 +344,9 @@ async function remove(factory) {
 // What the sidebar needs from this page.
 const sidebarEditor = {
   kind: 'factory',
-  state: () => ({ key: originalKey, dirty, editing }),
+  state: () => ({ key: originalKey, dirty }),
   open: (factory) => edit(factory, factory.key),
   remove,
-  discard: () => edit(blankFactory(), null),
   save,
 };
 

@@ -81,6 +81,8 @@
   "home.types": "你想制作什么？",
   "home.type.company": "公司",
   "home.type.company_hint": "新增公司，或修改已有的公司。",
+  "home.loaded_short": "已加载：{companies} 家公司、{buildings} 个建筑、{mods} 个模组",
+  "home.type.count": "模组中已有 {count} 项",
   "home.type.more": "更多模组类型",
   "home.type.planned": "计划在之后的版本中加入。",
 

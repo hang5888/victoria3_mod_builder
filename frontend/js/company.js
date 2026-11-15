@@ -226,10 +226,9 @@ async function remove(company) {
 // What the sidebar needs from this page.
 const sidebarEditor = {
   kind: 'company',
-  state: () => ({ key: originalKey, dirty, editing }),
+  state: () => ({ key: originalKey, dirty }),
   open: (company) => edit(company, company.key),
   remove,
-  discard: () => edit(blankCompany(), null),
   save,
 };
 

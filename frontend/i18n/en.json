@@ -81,6 +81,8 @@
   "home.types": "What do you want to build?",
   "home.type.company": "Companies",
   "home.type.company_hint": "Add new companies or change existing ones.",
+  "home.loaded_short": "Loaded: {companies} companies, {buildings} buildings, {mods} mods",
+  "home.type.count": "{count} in your mod",
   "home.type.more": "More mod types",
   "home.type.planned": "Planned for later versions.",
 

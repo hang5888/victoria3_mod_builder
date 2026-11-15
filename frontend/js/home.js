@@ -4,12 +4,14 @@ import { t } from './i18n.js';
 import { store, refreshState, setState, loadData, dropData } from './store.js';
 import { h, toast, errorText, debounce } from './ui.js';
 import { resetMap } from './map.js';
+import { thumb } from './icons.js';
 
 const FOLDERS = ['game_dir', 'workshop_dir', 'local_mod_dir'];
 
 let root = null;
 let modsInfo = null;    // /api/mods, when the folders are valid
 let projects = [];
+let projectData = null; // the current mod's project file, for the counts on the type cards
 let modQuery = '';
 let onlyCompanyMods = false;
 let triedDetect = false;
@@ -41,31 +43,76 @@ export async function renderHome(container) {
     modsInfo = null;
     projects = [];
   }
+  projectData = store.state.project ? await api.get('/api/project').catch(() => null) : null;
   await loadData();
   draw();
   if (store.state.load.state === 'loading') poll();
 }
 
+// The five steps of the page, in order: [title, done].
+function steps() {
+  const { load, project } = store.state;
+  return [
+    [t('home.folders'), foldersOk()],
+    [t('home.mods'), foldersOk()],  // choosing mods is optional
+    [t('home.load_title'), load.state === 'ready' && !load.stale],
+    [t('home.project'), Boolean(project)],
+    [t('home.types'), false],
+  ];
+}
+
+const allReady = () => steps().slice(0, 4).every(([, done]) => done);
+
 function draw() {
+  els.hero = hero();
   els.load = loadCard();
   els.types = typesCard();
-  root.replaceChildren(h('div', { class: 'home' },
-    h('p', { class: 'intro' }, t('home.intro')),
-    foldersCard(), modsCard(), els.load, projectCard(), els.types));
+  const setup = h('div', { class: 'home-grid' },
+    h('div', { class: 'home-col' }, foldersCard(), els.load, projectCard()),
+    h('div', { class: 'home-col' }, modsCard()));
+  // Once everything is set up, what to make comes first.
+  root.replaceChildren(h('div', { class: 'home' }, els.hero, allReady() ? [els.types, setup] : [setup, els.types]));
 }
 
 function redrawLoad() {
-  const fresh = loadCard();
-  els.load.replaceWith(fresh);
-  els.load = fresh;
-  const types = typesCard();
-  els.types.replaceWith(types);
-  els.types = types;
+  for (const [name, build] of [['hero', hero], ['load', loadCard], ['types', typesCard]]) {
+    const fresh = build();
+    els[name].replaceWith(fresh);
+    els[name] = fresh;
+  }
+}
+
+// Title, where things stand, and the steps with the next one marked.
+function hero() {
+  const { version, project, load } = store.state;
+  const list = steps();
+  const next = list.findIndex(([, done]) => !done);
+  const summary = load.state === 'ready' && load.summary;
+  return h('header', { class: 'hero' },
+    h('div', { class: 'hero-top' },
+      h('div', { class: 'hero-text' },
+        h('h1', {}, 'Victoria 3 Mod Builder'),
+        h('p', {}, t('home.intro'))),
+      h('div', { class: 'hero-status' },
+        version && h('span', { class: 'hero-chip' }, t('home.game_version', { version })),
+        project && h('span', { class: 'hero-chip accent', title: project.dir }, t('home.project_current', { name: project.name })),
+        summary && h('span', { class: 'hero-chip' }, t('home.loaded_short', {
+          companies: summary.companies, buildings: summary.buildings, mods: summary.mods })))),
+    h('ol', { class: 'stepper' }, list.map(([title, done], i) => h('li', {
+      class: 'stepper-item' + (done ? ' done' : '') + (i === next ? ' current' : ''),
+    },
+      h('button', {
+        class: 'stepper-button',
+        onclick: () => { const el = document.getElementById(`step-${i + 1}`); if (el) el.scrollIntoView({ behavior: 'smooth' }); },
+      },
+        h('span', { class: 'step' }, done ? '✓' : String(i + 1)),
+        h('span', { class: 'stepper-title' }, title))))));
 }
 
 function card(step, title, ...children) {
-  return h('section', { class: 'card' },
-    h('h2', {}, h('span', { class: 'step' }, step), title),
+  const done = steps()[Number(step) - 1][1];
+  return h('section', { class: 'card home-card', id: `step-${step}` },
+    h('h2', {}, h('span', { class: 'step' + (done ? ' done' : '') }, done ? '✓' : step), title),
     children);
 }
 
@@ -308,15 +355,26 @@ function typesCard() {
   let blocked = '';
   if (load.state !== 'ready') blocked = t('home.need_data');
   else if (!project) blocked = t('home.need_project');
+  // Game art for the cards, once there is data to take it from.
+  const data = store.data;
+  const find = (paths, word) => (data && (paths.find((path) => path.includes(word)) || paths[0])) || '';
+  const typeCard = (route, title, hint, art, icon, count) => h('button', {
+    class: 'type-card', disabled: !!blocked, onclick: () => { location.hash = '#/' + route; },
+  },
+    h('div', { class: 'type-art' },
+      thumb(art, 480, 'type-bg'), thumb(icon, 128, 'type-icon'),
+      count > 0 && h('span', { class: 'type-count' }, t('home.type.count', { count }))),
+    h('div', { class: 'type-body' }, h('b', {}, title), h('span', {}, blocked || hint)));
+  const counts = projectData || { companies: [], factories: [] };
   return card('5', t('home.types'),
     h('div', { class: 'types' },
-      h('button', { class: 'type-card', disabled: !!blocked, onclick: () => { location.hash = '#/company'; } },
-        h('b', {}, t('home.type.company')),
-        h('span', {}, blocked || t('home.type.company_hint'))),
-      h('button', { class: 'type-card', disabled: !!blocked, onclick: () => { location.hash = '#/factory'; } },
-        h('b', {}, t('home.type.factory')),
-        h('span', {}, blocked || t('home.type.factory_hint'))),
-      h('button', { class: 'type-card', disabled: true },
-        h('b', {}, t('home.type.more')),
-        h('span', {}, t('home.type.planned')))));
+      typeCard('company', t('home.type.company'), t('home.type.company_hint'),
+        find(data ? data.backgrounds : [], 'comp_illu_harbor_shipbuilding'), find(data ? data.icons : [], 'basic_steel'),
+        counts.companies.length),
+      typeCard('factory', t('home.type.factory'), t('home.type.factory_hint'),
+        find(data ? data.building_backgrounds : [], 'light_industry'), find(data ? data.building_icons : [], 'food_industry'),
+        (counts.factories || []).length),
+      h('div', { class: 'type-card planned' },
+        h('div', { class: 'type-art' }, h('span', { class: 'type-plus' }, '+')),
+        h('div', { class: 'type-body' }, h('b', {}, t('home.type.more')), h('span', {}, t('home.type.planned'))))));
 }

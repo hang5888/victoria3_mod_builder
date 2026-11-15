@@ -2,9 +2,9 @@
 // and open folder buttons.
 //
 // The editor page passes itself in as
-//   { kind, state() -> {key, dirty, editing}, open(item), remove(item), discard(), save() }
-// where `key` is the key of the opened item in the project (null for a new one) and
-// `editing` is the item as it is being edited.
+//   { kind, state() -> {key, dirty}, open(item), remove(item), save() }
+// where `key` is the key of the opened item in the project (null for a new one).
+// The list shows what is saved in the mod: a new item, or a change to one, appears after saving.
 import { api } from './api.js';
 import { t } from './i18n.js';
 import { store, companyName, factoryName, setProject } from './store.js';
@@ -99,7 +99,7 @@ function group(kind, def, state) {
   const items = def.items(store.project);
   const rows = items.map((item) => {
     const current = active && item.key === state.key;
-    return row(def, current ? state.editing : item, {
+    return row(def, item, {
       current,
       unsaved: current && state.dirty,
       // items of other kinds are edited on their own page
@@ -111,12 +111,6 @@ function group(kind, def, state) {
       removeTitle: t('sidebar.delete'),
     });
   });
-  // A new item that has not been saved yet.
-  if (active && state.key === null && state.dirty) {
-    rows.unshift(row(def, state.editing, {
-      current: true, unsaved: true, onOpen: null, onRemove: editor.discard, removeTitle: t('company.discard'),
-    }));
-  }
   const open = !collapsed.has(kind);
   return h('section', { class: 'side-group' },
     h('button', {
