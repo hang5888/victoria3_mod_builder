@@ -115,6 +115,10 @@
   "sidebar.save": "保存到模组",
   "sidebar.open_folder": "打开模组文件夹",
 
+  "editor.save": "保存",
+  "editor.close": "关闭并回到初始画面",
+  "editor.nothing_open": "目前没有打开任何项目。",
+  "editor.start_hint": "从这里新建，或在左侧打开模组里已有的项目，也可以在右侧选择已有的项目来修改或复制。",
   "company.editing": "正在编辑",
   "company.new": "新公司",
   "company.saved": "已保存。模组文件已写入 {dir}",

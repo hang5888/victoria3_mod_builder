@@ -73,13 +73,11 @@ export async function renderCompany(container) {
     return;
   }
   setProject(await api.get('/api/project'));
-  if (!editing || editingProject !== store.state.project.dir) {
-    editing = blankCompany();
+  if (editingProject !== store.state.project.dir) {
+    editing = null;  // nothing open: the start screen
     originalKey = null;
     dirty = false;
     editingProject = store.state.project.dir;
-    aiMode = aiModeOf(editing);
-    clearConditionCache();
   }
   els.sidebar = h('aside', { class: 'col col-sidebar' });
   els.left = h('div', { class: 'col col-left' });
@@ -216,12 +214,24 @@ async function remove(company) {
   setProject(await api.post('/api/project/company/delete', { key: company.key }));
   if (current) {
     dirty = false;
-    await edit(blankCompany(), null);
+    await close();
   } else {
     refreshSidebar();
   }
   toast(t('company.deleted'));
 }
+
+// Leave the editor for the start screen.
+async function close() {
+  if (dirty && !(await confirmDialog(t('company.discard_confirm'), t('company.discard')))) return;
+  editing = null;
+  originalKey = null;
+  dirty = false;
+  renderLeft();
+  renderMiddle();
+}
+
+const startCompany = () => run(() => edit(blankCompany(), null));
 
 // What the sidebar needs from this page.
 const sidebarEditor = {
@@ -235,12 +245,20 @@ const sidebarEditor = {
 // --------------------------------------------------------------------- left
 
 function renderLeft() {
+  if (!editing) {
+    fill(els.left,
+      h('div', { class: 'col-head' }, h('h2', {}, t('company.editing'))),
+      h('p', { class: 'muted' }, t('editor.nothing_open')));
+    refreshSidebar();
+    return;
+  }
   els.preview = h('div', { class: 'preview' });
   fill(els.left,
     h('div', { class: 'col-head' },
       h('h2', {}, t('company.editing')),
-      h('button', { class: 'btn', onclick: () => run(() => edit(blankCompany(), null)) }, t('company.new'))),
-    els.preview);
+      h('button', { class: 'btn primary', onclick: () => run(save) }, t('editor.save'))),
+    els.preview,
+    h('button', { class: 'btn new-item', onclick: startCompany }, t('company.new')));
   renderPreview();
   refreshSidebar();
 }
@@ -632,9 +650,19 @@ const builders = {
 };
 
 function renderMiddle() {
+  if (!editing) {
+    // The start screen: nothing is being edited yet.
+    fill(els.middle, h('div', { class: 'editor-start' },
+      h('button', { class: 'btn primary start-button', onclick: startCompany }, t('company.new')),
+      h('p', { class: 'muted' }, t('editor.start_hint'))));
+    return;
+  }
   const scroll = els.middle.scrollTop;
   for (const name of Object.keys(builders)) sections[name] = builders[name]();
-  els.middle.replaceChildren(...Object.values(sections));
+  fill(els.middle,
+    h('div', { class: 'editor-bar' },
+      h('button', { class: 'btn icon-btn', title: t('editor.close'), onclick: () => run(close) }, '✕')),
+    Object.values(sections));
   els.middle.scrollTop = scroll;
 }
 

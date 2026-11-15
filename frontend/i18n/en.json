@@ -115,6 +115,10 @@
   "sidebar.save": "Save to mod",
   "sidebar.open_folder": "Open mod folder",
 
+  "editor.save": "Save",
+  "editor.close": "Close and go back to the start screen",
+  "editor.nothing_open": "Nothing is open.",
+  "editor.start_hint": "Start a new one here, open one of your mod's items on the left, or pick an existing one on the right to change or copy.",
   "company.editing": "Editing",
   "company.new": "New company",
   "company.saved": "Saved. Mod files written to {dir}",
