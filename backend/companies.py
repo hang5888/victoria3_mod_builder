@@ -60,6 +60,18 @@ def company_from_block(key, block):
     return company
 
 
+def clean_names(names):
+    """Names per language as sent by the browser: one line each, real language keys only."""
+    if not isinstance(names or {}, dict):
+        raise ValueError("names")
+    clean = {}
+    for language, name in (names or {}).items():
+        name = " ".join(str(name or "").split())
+        if name and LANGUAGE_PATTERN.match(str(language)):
+            clean[language] = name
+    return clean
+
+
 def normalize_company(raw):
     """Bring a company sent by the browser into the model's shape.
 
@@ -70,13 +82,7 @@ def normalize_company(raw):
     company["key"] = str(raw.get("key") or "").strip()
     company["mode"] = "override" if raw.get("mode") == "override" else "new"
     company["flavored_company"] = bool(raw.get("flavored_company"))
-    names = raw.get("names") or {}
-    if not isinstance(names, dict):
-        raise ValueError("names")
-    for language, name in names.items():
-        name = " ".join(str(name or "").split())
-        if name and LANGUAGE_PATTERN.match(str(language)):
-            company["names"][language] = name
+    company["names"] = clean_names(raw.get("names"))
     for field in LIST_FIELDS:
         items = raw.get(field) or []
         if not isinstance(items, list) or not all(isinstance(i, str) and KEY_PATTERN.match(i) for i in items):

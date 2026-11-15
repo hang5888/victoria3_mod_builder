@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 
 from .companies import LANGUAGE_PATTERN, company_to_script, empty_company
+from .factories import (factory_to_script, fill_factory, modifier_texts, own_pmgs, own_pms, pm_to_script,
+                        pmg_to_script)
 from .localization import write_loc_file
 from .mods import PROJECT_FILE, discover_mods
 
@@ -47,7 +49,7 @@ def create_project(local_mod_dir, name, game_version):
     (folder / ".metadata" / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     project = {"tool": "vic-mod-builder", "format": FORMAT, "name": name, "slug": folder.name,
-               "companies": [], "generated_files": []}
+               "companies": [], "factories": [], "generated_files": []}
     save_project(folder, project)
     return str(folder)
 
@@ -62,43 +64,78 @@ def load_project(project_dir):
     # Fill in fields added by later versions of the tool.
     project["companies"] = [{**empty_company(), **c, "blocks": {**empty_company()["blocks"], **c.get("blocks", {})}}
                             for c in project.get("companies", [])]
+    project["factories"] = [fill_factory(f) for f in project.get("factories", [])]
     return project
 
 
-def save_project(project_dir, project):
-    """Write the project file and regenerate the game files from it."""
+def _write_script(root, rel, definitions, generated):
+    """One script file from the given definitions; nothing when there are none."""
+    if not definitions:
+        return
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8-sig", newline="\n") as f:
+        f.write("\n\n".join(definitions) + "\n")
+    generated.append(rel)
+
+
+def _write_names(root, slug, kind, items, generated, extra=lambda item, lang: {}):
+    """Localization of named items: one file per language, only for languages the user filled in.
+
+    Names of overridden items go under replace/ so they win over the original.
+    `extra(item, lang)` adds more texts for a new item that has a name in that language.
+    """
+    languages = {lang for item in items for lang, name in item.get("names", {}).items()
+                 if name and LANGUAGE_PATTERN.match(lang)}
+    for lang in sorted(languages):
+        new, replaced = {}, {}
+        for item in items:
+            name = item.get("names", {}).get(lang)
+            if not name:
+                continue
+            if item.get("mode") == "override":
+                replaced[item["key"]] = name
+            else:
+                new[item["key"]] = name
+                new.update(extra(item, lang))
+        if new:
+            rel = f"localization/{lang}/{slug}_{kind}_l_{lang}.yml"
+            write_loc_file(root / rel, lang, new)
+            generated.append(rel)
+        if replaced:
+            rel = f"localization/{lang}/replace/{slug}_{kind}_replace_l_{lang}.yml"
+            write_loc_file(root / rel, lang, replaced)
+            generated.append(rel)
+
+
+def save_project(project_dir, project, modifier_templates=lambda lang: None):
+    """Write the project file and regenerate the game files from it.
+
+    `modifier_templates(lang)`: the game's texts for a building's modifiers in
+    that language (see factories.modifier_texts), or None for the built-in English.
+    """
     root = Path(project_dir)
     slug = project["slug"]
     generated = []
 
+    # "zzz" keeps the files last in their folder's load order.
     companies = project["companies"]
-    if companies:
-        # "zzz" keeps the file last in the folder's load order.
-        rel = f"common/company_types/zzz_{slug}_companies.txt"
-        path = root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        text = "\n\n".join(company_to_script(c) for c in companies) + "\n"
-        with open(path, "w", encoding="utf-8-sig", newline="\n") as f:
-            f.write(text)
-        generated.append(rel)
+    _write_script(root, f"common/company_types/zzz_{slug}_companies.txt",
+                  [company_to_script(c) for c in companies], generated)
+    _write_names(root, slug, "companies", companies, generated)
 
-    # One file per language, only for languages the user filled in. Names of
-    # overridden companies go under replace/ so they win over the original.
-    languages = {lang for c in companies for lang, name in c.get("names", {}).items()
-                 if name and LANGUAGE_PATTERN.match(lang)}
-    for lang in sorted(languages):
-        new = {c["key"]: c["names"][lang] for c in companies
-               if c.get("mode") != "override" and c.get("names", {}).get(lang)}
-        replaced = {c["key"]: c["names"][lang] for c in companies
-                    if c.get("mode") == "override" and c.get("names", {}).get(lang)}
-        if new:
-            rel = f"localization/{lang}/{slug}_companies_l_{lang}.yml"
-            write_loc_file(root / rel, lang, new)
-            generated.append(rel)
-        if replaced:
-            rel = f"localization/{lang}/replace/{slug}_companies_replace_l_{lang}.yml"
-            write_loc_file(root / rel, lang, replaced)
-            generated.append(rel)
+    factories = project.get("factories", [])
+    groups, methods = own_pmgs(factories), own_pms(factories)
+    _write_script(root, f"common/buildings/zzz_{slug}_buildings.txt",
+                  [factory_to_script(f) for f in factories], generated)
+    _write_script(root, f"common/production_method_groups/zzz_{slug}_buildings.txt",
+                  [pmg_to_script(g) for g in groups], generated)
+    _write_script(root, f"common/production_methods/zzz_{slug}_buildings.txt",
+                  [pm_to_script(m) for m in methods], generated)
+    building_keys = {f["key"] for f in factories}
+    _write_names(root, slug, "buildings", [*factories, *groups, *methods], generated,
+                 lambda item, lang: (modifier_texts(item, lang, modifier_templates(lang))
+                                     if item["key"] in building_keys and "pmgs" in item else {}))
 
     for rel in project.get("generated_files", []):
         if rel not in generated:

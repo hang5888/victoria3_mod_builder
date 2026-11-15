@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import mods, project, textures
 from .companies import normalize_company, validate_company
+from .factories import normalize_factory, own_keys, validate_factory
 from .gamedata import GameData, game_languages
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -77,6 +78,10 @@ class App:
         if not path or not (Path(path) / mods.PROJECT_FILE).is_file():
             raise ApiError("no_project", 409)
         return path
+
+    def save_project(self, path, proj):
+        """Regenerate the mod's files; needs the game data for the texts copied from the game."""
+        return project.save_project(path, proj, self.require_data().modifier_templates)
 
     def project_info(self):
         try:
@@ -273,7 +278,16 @@ def api_post(app, path, body):
             path_ = app.require_project()
             proj = project.load_project(path_)
             proj["companies"] = [c for c in proj["companies"] if c["key"] != body.get("key")]
-            project.save_project(path_, proj)
+            app.save_project(path_, proj)
+            return proj
+    if path == "/api/project/factory":
+        return save_factory(app, body)
+    if path == "/api/project/factory/delete":
+        with app.lock:
+            path_ = app.require_project()
+            proj = project.load_project(path_)
+            proj["factories"] = [f for f in proj["factories"] if f["key"] != body.get("key")]
+            app.save_project(path_, proj)
             return proj
     raise ApiError("not_found", 404)
 
@@ -303,7 +317,34 @@ def save_company(app, body):
             proj["companies"].append(clean)
         else:
             proj["companies"][index] = clean
-        generated = project.save_project(path, proj)
+        generated = app.save_project(path, proj)
+        return {"errors": [], "project": proj, "generated": generated, "dir": path}
+
+
+def save_factory(app, body):
+    """Add or update one factory in the current project and regenerate the mod files."""
+    if not isinstance(body.get("factory"), dict):
+        raise ApiError("bad_request")
+    try:
+        clean = normalize_factory(body["factory"])
+    except (ValueError, AttributeError):
+        raise ApiError("bad_request")
+    original_key = body.get("original_key") or clean["key"]
+    with app.lock:
+        data = app.require_data()
+        path = app.require_project()
+        proj = project.load_project(path)
+        others = [f for f in proj["factories"] if f["key"] != original_key]
+        game = {"buildings": set(data.factories), "pmgs": set(data.pmgs), "pms": set(data.pms)}
+        errors = validate_factory(clean, game, own_keys(others))
+        if errors:
+            return {"errors": errors}
+        index = next((i for i, f in enumerate(proj["factories"]) if f["key"] == original_key), None)
+        if index is None:
+            proj["factories"].append(clean)
+        else:
+            proj["factories"][index] = clean
+        generated = app.save_project(path, proj)
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
 
 

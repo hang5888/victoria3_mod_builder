@@ -12,6 +12,9 @@ sys.path.insert(0, str(ROOT))
 from backend import project  # noqa: E402
 from backend.companies import (company_from_block, company_to_script, empty_company,  # noqa: E402
                                normalize_company, validate_company)
+from backend.factories import (factory_from_block, factory_to_script, modifier_texts,  # noqa: E402
+                               normalize_factory, own_keys, pm_from_block, pm_to_script, pmg_from_block,
+                               pmg_to_script, validate_factory)
 from backend.gamedata import FileSystem, GameData, Source  # noqa: E402
 from backend.localization import Localization, read_loc_file, read_loc_text  # noqa: E402
 from backend.mods import PROJECT_FILE  # noqa: E402
@@ -61,6 +64,87 @@ company_test = { # a comment with { braces
 	}
 }
 """
+
+
+BUILDING = """\
+building_test_works = {
+	building_group = bg_light_industry
+	icon = "gfx/interface/icons/building_icons/food_industry.dds"
+	city_type = city
+	levels_per_mesh = 50
+
+	unlocking_technologies = { manufacturies }
+
+	production_method_groups = {
+		pmg_base_building_test_works
+		pmg_canning
+	}
+
+	required_construction = construction_cost_high
+
+	possible = {
+		is_incorporated = yes
+	}
+
+	ai_value = {
+		value = 1000
+		if = { limit = { always = yes } add = 500 }
+	}
+	ownership_type = self
+	background = "gfx/interface/icons/building_icons/backgrounds/building_panel_bg_light_industry.dds"
+}
+"""
+
+PMG = """\
+pmg_base_building_test_works = {
+	texture = "gfx/interface/icons/generic_icons/mixed_icon_base.dds"
+	ai_selection = most_productive
+	production_methods = { pm_test_bakery pm_sweeteners }
+}
+"""
+
+PM = """\
+pm_test_bakery = {
+	texture = "gfx/interface/icons/production_method_icons/bakeries.dds"
+	is_default = yes
+	unlocking_technologies = { distillation }
+	disallowing_laws = { law_industry_banned }
+
+	building_modifiers = {
+		workforce_scaled = {
+			# input goods
+			goods_input_grain_add = 40
+			goods_input_small_arms_add = 5
+			goods_output_groceries_add = 45
+		}
+		level_scaled = {
+			building_employment_shopkeepers_add = 500
+			building_employment_laborers_add = -4500
+		}
+		unscaled = { building_laborers_mortality_mult = 0.1 }
+	}
+	state_modifiers = {
+		workforce_scaled = { state_pollution_generation_add = 10 }
+	}
+}
+"""
+
+
+def first_block(text):
+    entry = parse(text).entries[0]
+    return split_prefix(entry.key)[1], entry.value
+
+
+def sample_factory():
+    """The building above with its base group, and that group's first method, as the mod's own."""
+    factory = factory_from_block(*first_block(BUILDING))
+    pmg = pmg_from_block(*first_block(PMG))
+    pmg["pms"][0] = pm_from_block(*first_block(PM))
+    factory["pmgs"][0] = pmg
+    return factory
+
+
+NO_KEYS = {"buildings": set(), "pmgs": set(), "pms": set()}
 
 
 def first_company(text):
@@ -145,6 +229,101 @@ class CompanyTest(unittest.TestCase):
                              ("category", "a b"), ("prosperity_modifier", ["x"]), ("names", ["x"])):
             with self.assertRaises(ValueError, msg=field):
                 normalize_company({**raw, field: value})
+
+
+class FactoryTest(unittest.TestCase):
+    def test_read_fields(self):
+        factory = factory_from_block(*first_block(BUILDING))
+        self.assertEqual(factory["building_group"], "bg_light_industry")
+        self.assertEqual(factory["required_construction"], "construction_cost_high")
+        self.assertEqual(factory["unlocking_technologies"], ["manufacturies"])
+        self.assertEqual(factory["pmgs"], [{"type": "ref", "key": "pmg_base_building_test_works"},
+                                           {"type": "ref", "key": "pmg_canning"}])
+        self.assertIn("is_incorporated", factory["blocks"]["possible"])
+        self.assertIn("add = 500", factory["ai_value"])
+        self.assertEqual(factory["extra"], "levels_per_mesh = 50\nownership_type = self")
+        pmg = pmg_from_block(*first_block(PMG))
+        self.assertEqual([pm["key"] for pm in pmg["pms"]], ["pm_test_bakery", "pm_sweeteners"])
+        self.assertEqual(pmg["extra"], "ai_selection = most_productive")
+        pm = pm_from_block(*first_block(PM))
+        self.assertTrue(pm["is_default"])
+        self.assertEqual(pm["inputs"], [{"good": "grain", "amount": "40"}, {"good": "small_arms", "amount": "5"}])
+        self.assertEqual(pm["outputs"], [{"good": "groceries", "amount": "45"}])
+        self.assertEqual(pm["employment"], [{"pop": "shopkeepers", "amount": "500"},
+                                            {"pop": "laborers", "amount": "-4500"}])
+        self.assertEqual(pm["modifiers"], [
+            {"target": "building", "scale": "unscaled", "key": "building_laborers_mortality_mult", "value": "0.1"},
+            {"target": "state", "scale": "workforce_scaled", "key": "state_pollution_generation_add", "value": "10"}])
+        self.assertEqual(pm["extra"], "disallowing_laws = { law_industry_banned }")
+
+    def test_round_trip(self):
+        for text, read, write in ((BUILDING, factory_from_block, factory_to_script),
+                                  (PMG, pmg_from_block, pmg_to_script), (PM, pm_from_block, pm_to_script)):
+            model = read(*first_block(text))
+            self.assertEqual(read(*first_block(write(model))), model)
+
+    def test_plain_ai_value_and_override(self):
+        factory = factory_from_block(*first_block("building_x = { building_group = bg_a  ai_value = 1000 }"))
+        self.assertEqual(factory["ai_value"], "1000")
+        factory["mode"] = "override"
+        script = factory_to_script(factory)
+        self.assertTrue(script.startswith("REPLACE_OR_CREATE:building_x = {"))
+        self.assertIn("\tai_value = 1000\n", script)
+
+    def test_unusual_modifiers_stay_script(self):
+        pm = pm_from_block(*first_block("pm_x = { building_modifiers = { odd_scale = { a = 1 } } }"))
+        self.assertEqual(pm["modifiers"], [])
+        self.assertIn("odd_scale", pm["extra"])
+
+    def test_validate(self):
+        factory = normalize_factory(sample_factory())
+        self.assertEqual(validate_factory(factory, NO_KEYS, NO_KEYS), [])
+        self.assertEqual(own_keys([factory]), {"buildings": {"building_test_works"},
+                                               "pmgs": {"pmg_base_building_test_works"}, "pms": {"pm_test_bakery"}})
+        # keys taken by the game, unless the item overrides it
+        game = {"buildings": {"building_test_works"}, "pmgs": {"pmg_base_building_test_works"},
+                "pms": {"pm_test_bakery"}}
+        self.assertEqual(validate_factory(factory, game, NO_KEYS), [
+            "key_exists:building_test_works", "pmg_key_exists:pmg_base_building_test_works",
+            "pm_key_exists:pm_test_bakery"])
+        factory["mode"] = factory["pmgs"][0]["mode"] = factory["pmgs"][0]["pms"][0]["mode"] = "override"
+        self.assertEqual(validate_factory(factory, game, NO_KEYS), [])
+        # keys written by another factory of the mod are taken either way
+        self.assertEqual(len(validate_factory(factory, NO_KEYS, game)), 3)
+
+        bad = normalize_factory({"key": "bad key", "pmgs": [
+            {"type": "ref", "key": "pmg_a"}, {"type": "ref", "key": "pmg_a"},
+            {"type": "own", "key": "pmg_b", "pms": []},
+            {"type": "own", "key": "pmg_c", "extra": "a = {", "pms": [
+                {"type": "own", "key": "pm_a", "inputs": [{"good": "grain", "amount": "lots"}]},
+                {"type": "own", "key": "pm_a", "modifiers": [{"target": "moon", "scale": "unscaled", "key": "x",
+                                                              "value": "1"}]}]}]})
+        self.assertEqual(validate_factory(bad, NO_KEYS, NO_KEYS), [
+            "key_invalid:bad key", "group_missing", "icon_missing", "pmg_key_exists:pmg_a", "pmg_empty:pmg_b",
+            "braces:pmg_c", "pm_value:pm_a", "pm_key_exists:pm_a"])
+        self.assertEqual(validate_factory(normalize_factory({}), NO_KEYS, NO_KEYS),
+                         ["key_missing", "group_missing", "icon_missing", "pmgs_missing"])
+
+    def test_normalize_drops_unsafe_input(self):
+        raw = sample_factory()
+        raw["names"] = {"english": " Test\nWorks ", "../../evil": "x"}
+        raw["unknown"] = "ignored"
+        clean = normalize_factory(raw)
+        self.assertEqual(clean["names"], {"english": "Test Works"})
+        self.assertNotIn("unknown", clean)
+        for field, value in (("unlocking_technologies", ["a }"]), ("pmgs", "x"), ("pmgs", [{"type": "ref", "key": "a b"}]),
+                             ("blocks", ["x"]), ("names", ["x"])):
+            with self.assertRaises(ValueError, msg=field):
+                normalize_factory({**raw, field: value})
+
+    def test_modifier_texts(self):
+        factory = {"key": "building_test_works"}
+        self.assertEqual(modifier_texts(factory, "english"), {
+            "building_test_works_throughput_add": "$building_test_works$ building [concept_throughput]",
+            "building_test_works_throughput_add_desc":
+                "A bonus or penalty to both input and output of $building_test_works$"})
+        texts = modifier_texts(factory, "french", {"_throughput_add": "Débit de $building_food_industry$"})
+        self.assertEqual(texts["building_test_works_throughput_add"], "Débit de $building_test_works$")
 
 
 class LocalizationTest(unittest.TestCase):
@@ -255,6 +434,57 @@ class ProjectTest(unittest.TestCase):
         reopened = project.load_project(folder)
         self.assertEqual(reopened["companies"], [new, override])
 
+    def test_factories(self):
+        folder = Path(project.create_project(str(self.mods), "Works", "1.15.1"))
+        new = normalize_factory(sample_factory())
+        new["names"] = {"english": "Test Works"}
+        new["pmgs"][0]["names"] = {"english": "Base"}
+        new["pmgs"][0]["pms"][0]["names"] = {"english": "Bakery", "french": "Boulangerie"}
+        override = normalize_factory({**sample_factory(), "key": "building_food_industry", "mode": "override",
+                                      "names": {"english": "Better Food"},
+                                      "pmgs": [{"type": "ref", "key": "pmg_canning"},
+                                               {"type": "own", "mode": "override", "key": "pmg_distillery",
+                                                "pms": [{"type": "ref", "key": "pm_pot_stills"}]}]})
+        proj = project.load_project(folder)
+        proj["factories"] = [new, override]
+        generated = project.save_project(folder, proj, lambda lang: {"_throughput_add": f"{lang} $building_food_industry$"})
+        self.assertEqual(sorted(generated), [
+            "common/buildings/zzz_works_buildings.txt",
+            "common/production_method_groups/zzz_works_buildings.txt",
+            "common/production_methods/zzz_works_buildings.txt",
+            "localization/english/replace/works_buildings_replace_l_english.yml",
+            "localization/english/works_buildings_l_english.yml",
+            "localization/french/works_buildings_l_french.yml"])
+
+        def keys(rel):
+            raw = (folder / rel).read_bytes()
+            self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))
+            return [e.key for e in parse(raw.decode("utf-8-sig")).entries]
+
+        self.assertEqual(keys(generated[0]), ["building_test_works", "REPLACE_OR_CREATE:building_food_industry"])
+        self.assertEqual(keys(generated[1]), ["pmg_base_building_test_works", "REPLACE_OR_CREATE:pmg_distillery"])
+        self.assertEqual(keys(generated[2]), ["pm_test_bakery"])
+        english = read_loc_file(folder / "localization/english/works_buildings_l_english.yml")["english"]
+        self.assertEqual(english, {
+            "building_test_works": "Test Works",
+            "building_test_works_throughput_add": "english $building_test_works$",
+            "building_test_works_throughput_add_desc":
+                "A bonus or penalty to both input and output of $building_test_works$",
+            "pmg_base_building_test_works": "Base", "pm_test_bakery": "Bakery"})
+        replaced = read_loc_file(folder / "localization/english/replace/works_buildings_replace_l_english.yml")
+        self.assertEqual(replaced, {"english": {"building_food_industry": "Better Food"}})
+        # only the method has a French name: no modifier texts for the building there
+        french = read_loc_file(folder / "localization/french/works_buildings_l_french.yml")
+        self.assertEqual(french, {"french": {"pm_test_bakery": "Boulangerie"}})
+        self.assertEqual(project.load_project(folder)["factories"], [new, override])
+
+        # removing the factory removes its groups and methods with it
+        proj["factories"] = [override]
+        generated = project.save_project(folder, proj)
+        self.assertFalse((folder / "common/production_methods").exists())
+        self.assertEqual(keys("common/production_method_groups/zzz_works_buildings.txt"),
+                         ["REPLACE_OR_CREATE:pmg_distillery"])
+
     def test_stale_files_are_removed_but_nothing_else(self):
         folder = Path(project.create_project(str(self.mods), "Clean", "1.15.1"))
         mine = folder / "common" / "company_types" / "my_own_file.txt"
@@ -314,7 +544,16 @@ class InterfaceTextTest(unittest.TestCase):
         "error.": ["offline", "server_error", "not_loaded", "no_project", "folders_invalid", "bad_request",
                    "not_found", "name_missing", "browse_unavailable", "bad_path", "unsupported_texture",
                    "forbidden", "open_folder_failed"],
-        "sidebar.category.": ["company"],
+        "sidebar.category.": ["company", "factory"],
+        "factory.kind.": ["ref", "own", "override"],
+        "factory.target.": ["building", "state", "country"],
+        "factory.scale.": ["workforce_scaled", "level_scaled", "unscaled", "throughput_scaled"],
+        "fblock.": ["potential", "possible"],
+        "fblock.title.": ["potential", "possible"],
+        "fproblem.": ["key_missing", "key_invalid", "key_exists", "group_missing", "group_invalid", "icon_missing",
+                      "city_type_invalid", "construction_invalid", "braces", "pmgs_missing", "pmg_key_missing",
+                      "pmg_key_invalid", "pmg_key_exists", "pmg_empty", "pm_key_missing", "pm_key_invalid",
+                      "pm_key_exists", "pm_value"],
     }
 
     def test_keys(self):

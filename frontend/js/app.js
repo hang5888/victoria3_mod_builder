@@ -4,10 +4,11 @@ import { setUiLanguage, t } from './i18n.js';
 import { store, refreshState, setState, language } from './store.js';
 import { renderHome } from './home.js';
 import { renderCompany } from './company.js';
+import { renderFactory } from './factory.js';
 import { h, toast, errorText } from './ui.js';
 
 const view = document.getElementById('view');
-const routes = { home: renderHome, company: renderCompany };
+const routes = { home: renderHome, company: renderCompany, factory: renderFactory };
 
 function currentRoute() {
   const name = location.hash.replace(/^#\/?/, '');
@@ -19,7 +20,8 @@ function renderHeader() {
   const route = currentRoute();
   document.getElementById('nav').replaceChildren(
     h('a', { href: '#/', class: route === 'home' ? 'active' : '' }, t('nav.home')),
-    h('a', { href: '#/company', class: route === 'company' ? 'active' : '' }, t('nav.company')));
+    h('a', { href: '#/company', class: route === 'company' ? 'active' : '' }, t('nav.company')),
+    h('a', { href: '#/factory', class: route === 'factory' ? 'active' : '' }, t('nav.factory')));
   document.getElementById('project-label').textContent =
     state.project ? t('header.project', { name: state.project.name }) : '';
   document.getElementById('version-label').textContent =

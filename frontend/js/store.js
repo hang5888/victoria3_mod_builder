@@ -30,7 +30,7 @@ export function languageName(key) {
 }
 
 const INDEXED = ['companies', 'buildings', 'modifiers', 'states', 'regions', 'countries', 'prestige_goods', 'categories',
-  'technologies', 'cultures'];
+  'technologies', 'cultures', 'factories', 'building_groups', 'pmgs', 'pms', 'goods', 'pop_types', 'laws'];
 
 // Game data for the current language, or null when nothing is loaded yet.
 export async function loadData() {
@@ -42,10 +42,34 @@ export async function loadData() {
     const data = await api.get('/api/data?lang=' + encodeURIComponent(language()));
     const index = { sources: new Map(data.sources.map((s) => [s.id, s])) };
     for (const kind of INDEXED) index[kind] = new Map(data[kind].map((item) => [item.key, item]));
+    data.gameBuildings = data.buildings;
     store.data = data;
     store.index = index;
+    listProjectBuildings();
   }
   return store.data;
+}
+
+// The mod being built, as the backend returned it.
+export function setProject(project) {
+  store.project = project;
+  listProjectBuildings();
+  return project;
+}
+
+// New factories of the mod can be chosen wherever a building is chosen.
+function listProjectBuildings() {
+  const { data, index, project } = store;
+  if (!data || !project) return;
+  const known = new Set(data.gameBuildings.map((building) => building.key));
+  const own = (project.factories || []).filter((factory) => !known.has(factory.key)).map((factory) => {
+    const group = index.building_groups.get(factory.building_group);
+    const root = group ? group.root : factory.building_group;
+    return { key: factory.key, name: factoryName(factory), group: root, icon: factory.icon, used: false,
+      group_name: `${nameOf('building_groups', root)} · ${t('factory.in_mod')}` };
+  });
+  data.buildings = [...data.gameBuildings, ...own];
+  index.buildings = new Map(data.buildings.map((building) => [building.key, building]));
 }
 
 export function dropData() {
@@ -64,6 +88,13 @@ export function companyName(company) {
   const original = company.mode === 'override' && store.index ? store.index.companies.get(company.key) : null;
   return company.names[language()] || (original && original.name) || company.names.english
     || company.key || t('company.unnamed');
+}
+
+// Name of a factory in the project, by the same rules.
+export function factoryName(factory) {
+  const original = factory.mode === 'override' && store.index ? store.index.factories.get(factory.key) : null;
+  return factory.names[language()] || (original && original.name) || factory.names.english
+    || factory.key || t('factory.unnamed');
 }
 
 // Game path of an object's icon, or '' when it has none.

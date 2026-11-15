@@ -1,12 +1,14 @@
 // Company builder: the mod's contents (sidebar), the company being edited, the editor,
 // and the existing companies (right).
-import { api, textureUrl } from './api.js';
+import { api } from './api.js';
 import { t } from './i18n.js';
-import { store, refreshState, loadData, language, languageName, nameOf, companyName } from './store.js';
-import { renderSidebar, refreshSidebar } from './sidebar.js';
-import { h, fill, toast, errorText, confirmDialog, openPicker, debounce } from './ui.js';
+import { store, refreshState, loadData, language, languageName, nameOf, companyName, setProject } from './store.js';
+import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
+import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
 import { StateMap } from './map.js';
-import { ICON_KINDS, thumb, objectIcon, pickerIcon } from './icons.js';
+import { ICON_KINDS, thumb } from './icons.js';
+import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, imageField as imagePicker,
+  scriptArea as scriptBox } from './widgets.js';
 import { parseScript, bracesBalanced } from './script.js';
 import { COUNTRY_KINDS, STATE_KINDS, TARGET_KINDS, conditionEditor, clearConditionCache, countConditions,
   newRow, writeConditions, valueButton } from './conditions.js';
@@ -45,15 +47,6 @@ window.addEventListener('beforeunload', (event) => {
   if (dirty) event.preventDefault();
 });
 
-async function run(action) {
-  try {
-    await action();
-  } catch (error) {
-    console.error(error);
-    toast(errorText(error), 'error');
-  }
-}
-
 function blankCompany() {
   return {
     key: '', mode: 'new', names: {}, flavored_company: true, prosperity_modifier: [],
@@ -79,7 +72,7 @@ export async function renderCompany(container) {
       h('a', { href: '#/' }, t('company.go_home'))));
     return;
   }
-  store.project = await api.get('/api/project');
+  setProject(await api.get('/api/project'));
   if (!editing || editingProject !== store.state.project.dir) {
     editing = blankCompany();
     originalKey = null;
@@ -97,6 +90,10 @@ export async function renderCompany(container) {
   renderLeft();
   renderMiddle();
   renderRight();
+  // an item of this page clicked in the sidebar of another page
+  const wanted = takePending('company');
+  const company = wanted && wanted !== originalKey && store.project.companies.find((c) => c.key === wanted);
+  if (company) await edit(company, company.key);
 }
 
 // ----------------------------------------------------------------- helpers
@@ -106,12 +103,6 @@ function originalOf(company) {
 }
 
 const displayName = companyName;
-
-function sourceName(id) {
-  if (id === 'game') return t('company.source_game');
-  const source = store.index.sources.get(id);
-  return source ? source.name : id;
-}
 
 function keyTaken(key) {
   return store.index.companies.has(key)
@@ -149,10 +140,6 @@ function formatModifier(modifier) {
     tone = (value > 0) === (info.color === 'good') ? 'good' : 'bad';
   }
   return { text, tone };
-}
-
-function objectChip(kind, key, ...extra) {
-  return h('span', { class: 'chip', title: key }, objectIcon(kind, key), nameOf(kind, key), extra);
 }
 
 const squash = (text) => text.replace(/\s+/g, ' ').trim();
@@ -214,7 +201,7 @@ async function save() {
     toast(result.errors.map(problemText).join('\n'), 'error');
     return;
   }
-  store.project = result.project;
+  setProject(result.project);
   originalKey = editing.key;
   dirty = false;
   renderLeft();
@@ -226,7 +213,7 @@ async function remove(company) {
   const current = company.key === originalKey;
   const name = displayName(current ? editing : company);
   if (!(await confirmDialog(t('company.delete_confirm', { name }), t('company.delete')))) return;
-  store.project = await api.post('/api/project/company/delete', { key: company.key });
+  setProject(await api.post('/api/project/company/delete', { key: company.key }));
   if (current) {
     dirty = false;
     await edit(blankCompany(), null);
@@ -325,15 +312,6 @@ function renderPreview() {
 
 // ------------------------------------------------------------------- middle
 
-function section(title, hint, ...children) {
-  return h('section', { class: 'card' }, h('h3', {}, title), hint && h('p', { class: 'muted' }, hint), children);
-}
-
-function field(label, control, hint) {
-  return h('label', { class: 'field' },
-    h('span', { class: 'field-label' }, label), control, hint && h('span', { class: 'muted small' }, hint));
-}
-
 function basicSection() {
   const company = editing;
   const original = originalOf(company);
@@ -374,22 +352,8 @@ function basicSection() {
 }
 
 function imageField(name, label, paths, wide) {
-  const input = h('input', {
-    class: 'input mono', type: 'text', spellcheck: false, value: editing[name],
-    onchange: () => { editing[name] = input.value.trim(); changed(); refresh('images'); },
-  });
-  const choose = () => openPicker({
-    title: label, multi: false, wide, selected: editing[name] ? [editing[name]] : [],
-    items: paths.map((path) => ({ key: path, name: path.split('/').pop().replace(/\.\w+$/, '') })),
-    thumb: (item) => textureUrl(item.key, wide ? 320 : 128),
-    onDone: ([path]) => { editing[name] = path; changed(); refresh('images'); },
-  });
-  return h('div', { class: 'image-field' + (wide ? ' wide' : '') },
-    thumb(editing[name], wide ? 320 : 128, 'image-thumb'),
-    h('div', { class: 'grow' },
-      h('span', { class: 'field-label' }, label),
-      input,
-      h('button', { class: 'btn', onclick: choose }, t('common.choose'))));
+  return imagePicker({ label, value: editing[name], paths, wide,
+    onChange: (path) => { editing[name] = path; changed(); refresh('images'); } });
 }
 
 function imagesSection() {
@@ -398,29 +362,9 @@ function imagesSection() {
     imageField('background', t('company.background'), store.data.backgrounds, true));
 }
 
-// A list of chosen game objects shown as removable chips, with a picker to add more.
 function chipField(name, kind, label, hint, sectionName, toggle) {
-  const pick = () => openPicker({
-    title: label, selected: editing[name], toggle, icon: pickerIcon(kind),
-    items: store.data[kind].filter((item) => !item.sea).map((item) => ({
-      key: item.key, name: item.name || item.key, used: item.used,
-      sub: item.group_name || item.good_name || (item.region && nameOf('regions', item.region)) || item.key,
-    })),
-    onDone: (keys) => { editing[name] = keys; changed(); refresh(sectionName); },
-  });
-  return h('div', { class: 'chip-field' },
-    h('div', { class: 'row' },
-      h('span', { class: 'field-label' }, label),
-      h('button', { class: 'btn', onclick: pick }, t('common.choose'))),
-    hint && h('p', { class: 'muted small' }, hint),
-    h('div', { class: 'chips' }, editing[name].map((key) =>
-      objectChip(kind, key,
-        h('button', { class: 'chip-remove', title: t('common.remove'), onclick: () => {
-          editing[name] = editing[name].filter((k) => k !== key);
-          changed();
-          refresh(sectionName);
-        } }, '✕'))),
-    editing[name].length === 0 && h('span', { class: 'muted' }, t('common.none'))));
+  return keyChips({ keys: editing[name], kind, label, hint, toggle,
+    onChange: (keys) => { editing[name] = keys; changed(); refresh(sectionName); } });
 }
 
 function buildingsSection() {
@@ -665,25 +609,7 @@ function aiSection() {
     blockEditor('ai_construction_targets', TARGET_KINDS));
 }
 
-function scriptArea(get, set) {
-  const area = h('textarea', {
-    class: 'input mono script', spellcheck: false, value: get(),
-    rows: Math.min(16, Math.max(2, get().split('\n').length + 1)),
-    oninput: () => {
-      set(area.value);
-      area.classList.toggle('invalid', !bracesBalanced(area.value));
-      changed();
-    },
-    onkeydown: (event) => {
-      if (event.key !== 'Tab' || event.shiftKey || event.ctrlKey || event.altKey) return;
-      event.preventDefault();
-      area.setRangeText('\t', area.selectionStart, area.selectionEnd, 'end');
-      area.dispatchEvent(new Event('input'));
-    },
-  });
-  area.classList.toggle('invalid', !bracesBalanced(area.value));
-  return area;
-}
+const scriptArea = (get, set) => scriptBox(get, set, changed);
 
 function advancedSection() {
   const company = editing;
@@ -782,17 +708,6 @@ function companyDetails(company) {
     h('div', { class: 'row' },
       h('button', { class: 'btn', onclick: () => run(() => overrideCompany(shown)) }, t('company.override')),
       h('button', { class: 'btn', onclick: () => run(() => copyCompany(shown)) }, t('company.copy'))));
-}
-
-// A tag for every source that defines or changes the company; none for a base game only company.
-// The last one is in effect and is the strong one.
-function sourceBadges(company) {
-  if (company.sources.length === 1 && company.source === 'game') return null;
-  const last = company.sources[company.sources.length - 1];
-  return h('span', { class: 'badges' }, company.sources.map((id) => h('span', {
-    class: 'badge source' + (id === last ? '' : ' faded'),
-    title: id === last && company.sources.length > 1 ? t('company.source_active', { source: sourceName(id) }) : sourceName(id),
-  }, sourceName(id))));
 }
 
 function renderList() {

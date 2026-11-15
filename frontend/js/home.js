@@ -313,6 +313,9 @@ function typesCard() {
       h('button', { class: 'type-card', disabled: !!blocked, onclick: () => { location.hash = '#/company'; } },
         h('b', {}, t('home.type.company')),
         h('span', {}, blocked || t('home.type.company_hint'))),
+      h('button', { class: 'type-card', disabled: !!blocked, onclick: () => { location.hash = '#/factory'; } },
+        h('b', {}, t('home.type.factory')),
+        h('span', {}, blocked || t('home.type.factory_hint'))),
       h('button', { class: 'type-card', disabled: true },
         h('b', {}, t('home.type.more')),
         h('span', {}, t('home.type.planned')))));

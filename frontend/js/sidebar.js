@@ -7,13 +7,15 @@
 // `editing` is the item as it is being edited.
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { store, companyName } from './store.js';
-import { h, fill, toast, errorText } from './ui.js';
+import { store, companyName, factoryName } from './store.js';
+import { h, fill } from './ui.js';
 import { thumb } from './icons.js';
+import { run } from './widgets.js';
 
-// What a mod can contain, in the order shown.
+// What a mod can contain, in the order shown. The kind is also the name of its editor page.
 const KINDS = {
   company: { items: (project) => project.companies, name: companyName, icon: (item) => item.icon },
+  factory: { items: (project) => project.factories || [], name: factoryName, icon: (item) => item.icon },
 };
 
 // Collapsed categories, and '' when the whole sidebar is collapsed.
@@ -22,6 +24,15 @@ const SIDEBAR = '';
 const collapsed = loadCollapsed();
 let container = null;
 let editor = null;
+let pending = null;  // an item of another page that was clicked: {kind, key}
+
+// The key of the item the page of this kind should open, when the user came for one.
+export function takePending(kind) {
+  if (!pending || pending.kind !== kind) return null;
+  const { key } = pending;
+  pending = null;
+  return key;
+}
 
 function loadCollapsed() {
   try {
@@ -40,15 +51,6 @@ function toggle(kind) {
     // remembering is only a convenience
   }
   refreshSidebar();
-}
-
-async function run(action) {
-  try {
-    await action();
-  } catch (error) {
-    console.error(error);
-    toast(errorText(error), 'error');
-  }
 }
 
 export function renderSidebar(element, activeEditor) {
@@ -91,8 +93,12 @@ function group(kind, def, state) {
     return row(def, current ? state.editing : item, {
       current,
       unsaved: current && state.dirty,
-      onOpen: current ? null : () => editor.open(item),
-      onRemove: () => editor.remove(item),
+      // items of other kinds are edited on their own page
+      onOpen: current ? null : active ? () => editor.open(item) : () => {
+        pending = { kind, key: item.key };
+        location.hash = '#/' + kind;
+      },
+      onRemove: active ? () => editor.remove(item) : null,
       removeTitle: t('sidebar.delete'),
     });
   });
@@ -126,5 +132,5 @@ function row(def, item, { current, unsaved, onOpen, onRemove, removeTitle }) {
       h('span', { class: 'side-badges' },
         h('span', { class: 'badge' + (item.mode === 'override' ? ' accent' : '') }, t('company.mode.' + item.mode)),
         unsaved && h('span', { class: 'badge warn' }, t('company.unsaved')))),
-    h('button', { class: 'btn icon-btn side-remove', title: removeTitle, onclick: () => run(onRemove) }, '✕'));
+    onRemove && h('button', { class: 'btn icon-btn side-remove', title: removeTitle, onclick: () => run(onRemove) }, '✕'));
 }
