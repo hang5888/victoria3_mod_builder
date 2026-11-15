@@ -4,7 +4,7 @@
 // A factory's production method groups (pmgs) are entries {type: 'ref', key} pointing at an
 // existing group, or {type: 'own', ...} written by this mod (mode 'new' or 'override').
 // The production methods (pms) of an own group are entries of the same two types.
-import { api } from './api.js';
+import { api, textureUrl } from './api.js';
 import { t } from './i18n.js';
 import { store, refreshState, loadData, language, languageName, nameOf, factoryName, setProject } from './store.js';
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
@@ -588,21 +588,47 @@ function removeButton(list, index) {
     onclick: () => { list.splice(index, 1); restructured(); } }, '✕');
 }
 
-// Names of what else uses a group (buildings) or a method (groups), for the override warning.
+// Names of the other buildings that depend on a group ('pmgs') or a method ('pms'); a method
+// in a group no building uses counts through that group. What this factory itself overrides
+// is left out. Empty means nothing else is affected by changing it.
 function usersOf(kind, key) {
-  const users = kind === 'pmgs'
-    ? store.data.factories.filter((f) => f.key !== editing.key && f.pmgs.some((entry) => entry.key === key))
-    : store.data.pmgs.filter((g) => g.pms.some((entry) => entry.key === key)
-      && !editing.pmgs.some((entry) => entry.type === 'own' && entry.mode === 'override' && entry.key === g.key));
-  return users.map((item) => item.name || item.key);
+  const buildingsOf = (group) => store.data.factories
+    .filter((f) => f.key !== editing.key && f.pmgs.some((entry) => entry.key === group));
+  if (kind === 'pmgs') return buildingsOf(key).map((item) => item.name || item.key);
+  const groups = store.data.pmgs.filter((g) => g.pms.some((entry) => entry.key === key)
+    && !editing.pmgs.some((entry) => entry.type === 'own' && entry.mode === 'override' && entry.key === g.key));
+  const names = groups.flatMap((g) => {
+    const buildings = buildingsOf(g.key);
+    return (buildings.length ? buildings : [g]).map((item) => item.name || item.key);
+  });
+  return [...new Set(names)];
 }
 
-async function confirmOverride(kind, key) {
+const userNames = (users) => users.slice(0, 8).join(', ') + (users.length > 8 ? '…' : '');
+
+function confirmOverride(users) {
+  return confirmDialog(t('factory.override_shared', { count: users.length, names: userNames(users) }),
+    t('factory.override_direct'));
+}
+
+// What can be done with a referenced group or method. Shared with other buildings: copy it
+// for this factory, or override it for all of them (they are listed). Not shared: just edit it.
+function referenceActions(kind, key, small, replace) {
   const users = usersOf(kind, key);
-  const names = users.slice(0, 8).join(', ') + (users.length > 8 ? '…' : '');
-  const shared = kind === 'pms' ? users.length > 1 : users.length > 0;
-  const message = shared ? t('factory.override_shared', { count: users.length, names }) : t('factory.override_confirm');
-  return confirmDialog(message, t('factory.override_direct'));
+  const cls = 'btn' + (small ? ' small' : '');
+  if (!users.length) {
+    return { note: null, buttons: [h('button', { class: cls, onclick: () => replace('override') }, t('factory.edit'))] };
+  }
+  return {
+    note: h('div', { class: 'shared-note', title: users.join(', ') },
+      t('factory.shared_with', { count: users.length, names: userNames(users) })),
+    buttons: [
+      h('button', { class: cls, title: t('factory.copy_own_hint'), onclick: () => replace('new') }, t('factory.copy_own')),
+      h('button', { class: cls, title: t('factory.override_direct_hint'), onclick: () => run(async () => {
+        if (await confirmOverride(users)) replace('override');
+      }) }, t('factory.override_direct')),
+    ],
+  };
 }
 
 // A copy of an existing method as the mod's own: a new one, or an override of the same key.
@@ -643,10 +669,14 @@ function addRefPmgs() {
   for (const factory of store.data.factories) {
     for (const entry of factory.pmgs) users.set(entry.key, [...(users.get(entry.key) || []), factory.name || factory.key]);
   }
+  // each group shows the icon of its first method
+  const firstIcon = (pmg) => ((pmg.pms.length && store.index.pms.get(pmg.pms[0].key)) || { texture: '' }).texture;
   openPicker({
-    title: t('factory.add_pmg_ref'), selected: [],
+    title: t('factory.add_pmg_ref'), selected: [], roomy: true,
+    icon: (item) => (item.icon ? textureUrl(item.icon, 64) : ''),
     items: store.data.pmgs.filter((pmg) => !present.has(pmg.key)).map((pmg) => ({
-      key: pmg.key, name: pmg.name || pmg.key, sub: (users.get(pmg.key) || [pmg.key]).join(', ') })),
+      key: pmg.key, name: pmg.name || pmg.key, icon: firstIcon(pmg),
+      sub: `${pmg.key} · ${userNames(users.get(pmg.key) || ['—'])}` })),
     onDone: (keys) => {
       editing.pmgs.push(...keys.map((key) => ({ type: 'ref', key })));
       restructured();
@@ -675,16 +705,11 @@ function pmgCard(entry, index) {
     moveButtons(list, index), removeButton(list, index));
   if (!pmg) return h('div', { class: 'pmg-card' }, head, h('div', { class: 'notice warn' }, t('factory.missing', { key: entry.key })));
   if (!own) {
-    return h('div', { class: 'pmg-card' }, head,
+    const actions = referenceActions('pmgs', entry.key, false,
+      (mode) => { list[index] = ownPmg(entry.key, mode); restructured(); });
+    return h('div', { class: 'pmg-card' }, head, actions.note,
       pmg.pms.map((pm) => pmLine(pm)),
-      h('div', { class: 'row' },
-        h('button', { class: 'btn', title: t('factory.copy_own_hint'),
-          onclick: () => { list[index] = ownPmg(entry.key, 'new'); restructured(); } }, t('factory.copy_own')),
-        h('button', { class: 'btn', title: t('factory.override_direct_hint'), onclick: () => run(async () => {
-          if (!(await confirmOverride('pmgs', entry.key))) return;
-          list[index] = ownPmg(entry.key, 'override');
-          restructured();
-        }) }, t('factory.override_direct'))));
+      h('div', { class: 'row' }, actions.buttons));
   }
   const touch = () => { drawTitle(); changed(); };
   const original = entry.mode === 'override' ? store.index.pmgs.get(entry.key) : null;
@@ -709,8 +734,10 @@ function pmgCard(entry, index) {
 function addRefPms(pmg) {
   const present = new Set(pmg.pms.map((entry) => entry.key));
   openPicker({
-    title: t('factory.add_pm_ref'), selected: [],
-    items: store.data.pms.filter((pm) => !present.has(pm.key)).map((pm) => ({ key: pm.key, name: pm.name || pm.key, sub: pm.key })),
+    title: t('factory.add_pm_ref'), selected: [], roomy: true,
+    icon: (item) => (item.icon ? textureUrl(item.icon, 64) : ''),
+    items: store.data.pms.filter((pm) => !present.has(pm.key)).map((pm) => ({
+      key: pm.key, name: pm.name || pm.key, icon: pm.texture, sub: pm.key })),
     onDone: (keys) => {
       pmg.pms.push(...keys.map((key) => ({ type: 'ref', key })));
       restructured();
@@ -733,18 +760,14 @@ function pmLine(entry, ...actions) {
 
 // A referenced method inside an own group.
 function pmReference(pmg, entry, index) {
-  const known = store.index.pms.has(entry.key);
-  return pmLine(entry,
-    known && h('button', { class: 'btn small', title: t('factory.copy_own_hint'),
-      onclick: () => { pmg.pms[index] = ownPm(entry.key, 'new'); openPms.add(pmg.pms[index]); restructured(); } },
-    t('factory.copy_own')),
-    known && h('button', { class: 'btn small', title: t('factory.override_direct_hint'), onclick: () => run(async () => {
-      if (!(await confirmOverride('pms', entry.key))) return;
-      pmg.pms[index] = ownPm(entry.key, 'override');
-      openPms.add(pmg.pms[index]);
-      restructured();
-    }) }, t('factory.override_direct')),
-    moveButtons(pmg.pms, index), removeButton(pmg.pms, index));
+  const actions = store.index.pms.has(entry.key) ? referenceActions('pms', entry.key, true, (mode) => {
+    pmg.pms[index] = ownPm(entry.key, mode);
+    openPms.add(pmg.pms[index]);
+    restructured();
+  }) : { note: null, buttons: [] };
+  return h('div', { class: 'pm-reference' },
+    pmLine(entry, actions.buttons, moveButtons(pmg.pms, index), removeButton(pmg.pms, index)),
+    actions.note);
 }
 
 // Rows of "object + amount" (goods in or out, employed pops).

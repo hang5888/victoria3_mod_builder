@@ -83,10 +83,11 @@ const PAGE = 200;
 //   selected: keys chosen so far; multi: allow several
 //   thumb:    optional function item -> image URL (shows a picture grid)
 //   icon:     optional function item -> small image URL beside the name ('' for none)
+//   roomy:    wider dialog and items, with the secondary text on several lines
 //   toggle:   optional {label, test(item), on} extra filter checkbox
 //   onDone:   called with the chosen keys
 export function openPicker({ title, items, selected = [], multi = true, thumb = null, icon = null, wide = false,
-  toggle = null, onDone }) {
+  roomy = false, toggle = null, onDone }) {
   const chosen = new Set(selected);
   let query = '';
   let limit = PAGE;
@@ -95,7 +96,8 @@ export function openPicker({ title, items, selected = [], multi = true, thumb = 
     if (!item.search) item.search = `${item.name} ${item.key} ${item.sub || ''}`.toLowerCase();
   }
 
-  const list = h('div', { class: 'picker-list' + (thumb ? ' picker-grid' : '') + (wide ? ' picker-wide' : '') });
+  const list = h('div', { class: 'picker-list' + (thumb ? ' picker-grid' : '') + (wide ? ' picker-wide' : '')
+    + (roomy ? ' picker-roomy' : '') });
   const status = h('span', { class: 'muted' });
   const doneButton = h('button', { class: 'btn primary', onclick: () => finish() });
 
@@ -152,7 +154,7 @@ export function openPicker({ title, items, selected = [], multi = true, thumb = 
     type: 'search', class: 'input', placeholder: t('common.search'),
     oninput: debounce(() => { query = search.value; limit = PAGE; renderList(); }, 120),
   });
-  const modal = h('div', { class: 'modal picker' },
+  const modal = h('div', { class: 'modal picker' + (roomy ? ' modal-large' : '') },
     h('div', { class: 'modal-header' },
       h('h3', {}, title),
       h('button', { class: 'btn icon-btn', title: t('common.close'), onclick: () => close() }, '✕')),
