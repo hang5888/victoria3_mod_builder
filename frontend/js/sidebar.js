@@ -2,7 +2,7 @@
 // and open folder buttons.
 //
 // The editor page passes itself in as
-//   { kind, state() -> {key, dirty}, open(item), remove(item), save() }
+//   { kind, state() -> {key, dirty}, open(item), remove(item) }
 // where `key` is the key of the opened item in the project (null for a new one).
 // The list shows what is saved in the mod: a new item, or a change to one, appears after saving.
 import { api } from './api.js';
@@ -85,9 +85,9 @@ export function refreshSidebar() {
         t('sidebar.open_folder'))));
 }
 
-// Save the item being edited; with nothing changed, write the mod's files again from the project.
+// Write the mod's files from what is saved in it (the items listed here). The item being
+// edited is saved with the button of its own page.
 async function save() {
-  if (editor.state().dirty) return editor.save();
   const result = await api.post('/api/project/save', {});
   setProject(result.project);
   refreshSidebar();

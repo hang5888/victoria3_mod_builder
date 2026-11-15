@@ -239,7 +239,6 @@ const sidebarEditor = {
   state: () => ({ key: originalKey, dirty }),
   open: (company) => edit(company, company.key),
   remove,
-  save,
 };
 
 // --------------------------------------------------------------------- left
