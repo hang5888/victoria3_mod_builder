@@ -268,6 +268,13 @@ def api_post(app, path, body):
             s["project_dir"] = target
             app.save_settings()
         return app.state()
+    if path == "/api/project/save":
+        # Regenerate every file of the mod from the project file, without changing anything.
+        with app.lock:
+            path_ = app.require_project()
+            proj = project.load_project(path_)
+            generated = app.save_project(path_, proj)
+            return {"project": proj, "generated": generated, "dir": path_}
     if path == "/api/project/open_folder":
         open_folder(app.require_project())
         return {}

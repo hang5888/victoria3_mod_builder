@@ -7,8 +7,8 @@
 // `editing` is the item as it is being edited.
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { store, companyName, factoryName } from './store.js';
-import { h, fill } from './ui.js';
+import { store, companyName, factoryName, setProject } from './store.js';
+import { h, fill, toast } from './ui.js';
 import { thumb } from './icons.js';
 import { run } from './widgets.js';
 
@@ -80,9 +80,18 @@ export function refreshSidebar() {
     h('div', { class: 'muted small', title: store.state.project ? store.state.project.dir : '' }, store.project.name),
     Object.entries(KINDS).map(([kind, def]) => group(kind, def, state)),
     h('div', { class: 'actions sidebar-actions' },
-      h('button', { class: 'btn primary', onclick: () => run(editor.save) }, t('sidebar.save')),
+      h('button', { class: 'btn primary', onclick: () => run(save) }, t('sidebar.save')),
       h('button', { class: 'btn', onclick: () => run(() => api.post('/api/project/open_folder', {})) },
         t('sidebar.open_folder'))));
+}
+
+// Save the item being edited; with nothing changed, write the mod's files again from the project.
+async function save() {
+  if (editor.state().dirty) return editor.save();
+  const result = await api.post('/api/project/save', {});
+  setProject(result.project);
+  refreshSidebar();
+  toast(t('company.saved', { dir: result.dir }));
 }
 
 function group(kind, def, state) {
