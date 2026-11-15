@@ -951,10 +951,42 @@ function matchesFilters(factory) {
   const query = filters.query.trim().toLowerCase();
   if (query && !(factory.name || '').toLowerCase().includes(query) && !factory.key.toLowerCase().includes(query)) return false;
   if (filters.source && !factory.sources.includes(filters.source)) return false;
-  if (filters.group && factory.building_group !== filters.group) return false;
+  if (filters.group && !groupChain(factory.building_group).includes(filters.group)) return false;
   if (filters.output && !goodsOf(factory).outputs.has(filters.output)) return false;
   if (filters.input && !goodsOf(factory).inputs.has(filters.input)) return false;
   return true;
+}
+
+// A building group and the groups above it.
+function groupChain(group) {
+  const chain = [];
+  while (group && !chain.includes(group)) {
+    chain.push(group);
+    group = (store.index.building_groups.get(group) || {}).parent;
+  }
+  return chain;
+}
+
+// Group filter options as a tree: each group under its parent, indented, with the number of
+// buildings in it and the groups below it.
+function groupOptions(counts) {
+  const children = new Map();
+  for (const key of counts.keys()) {
+    const parent = (store.index.building_groups.get(key) || {}).parent || '';
+    const top = counts.has(parent) ? parent : '';
+    if (!children.has(top)) children.set(top, []);
+    children.get(top).push(key);
+  }
+  const options = [];
+  const walk = (parent, depth) => {
+    const keys = (children.get(parent) || []).sort((a, b) => nameOf('building_groups', a).localeCompare(nameOf('building_groups', b)));
+    for (const key of keys) {
+      options.push([key, `${'   '.repeat(depth)}${nameOf('building_groups', key)} (${counts.get(key)})`]);
+      walk(key, depth + 1);
+    }
+  };
+  walk('', 0);
+  return options;
 }
 
 // The version of a building shown in the list: the one in effect, or an earlier one picked
@@ -1061,8 +1093,7 @@ function renderRight() {
     h('div', { class: 'filters' },
       search,
       filterSelect('source', t('company.filter_source'), sources),
-      filterSelect('group', t('factory.filter_group'),
-        options(count((factory) => (factory.building_group ? [factory.building_group] : [])), 'building_groups')),
+      filterSelect('group', t('factory.filter_group'), groupOptions(count((factory) => groupChain(factory.building_group)))),
       filterSelect('output', t('factory.filter_output'), options(count((factory) => goodsOf(factory).outputs), 'goods')),
       filterSelect('input', t('factory.filter_input'), options(count((factory) => goodsOf(factory).inputs), 'goods'))),
     els.list);

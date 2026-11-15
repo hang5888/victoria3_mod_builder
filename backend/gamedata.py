@@ -376,7 +376,7 @@ class GameData:
             chain = self.group_chain(key)
             flags = [self.group_info[g] for g in chain if g in self.group_info]
             groups.append({
-                "key": key, "name": loc.name(key), "root": chain[-1],
+                "key": key, "name": loc.name(key), "root": chain[-1], "parent": self.building_groups.get(key) or "",
                 # where a factory can be put: production groups, not the subsistence ones
                 "production": chain[-1] in PRODUCTION_GROUPS and not any(f["is_subsistence"] for f in flags),
                 # needs arable land or a resource in the state region
