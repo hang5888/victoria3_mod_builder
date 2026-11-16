@@ -556,6 +556,8 @@ class InterfaceTextTest(unittest.TestCase):
         "fset.hint.": ["ownership_type", "terrain_manipulator", "levels_per_mesh", "ai_nationalization_desire",
                        "residence_points_per_level", "aliases", "locator"],
         "fset.ownership.": ["self", "other", "no_ownership"],
+        "fset.warn.": ["ownership_type", "terrain_manipulator", "buildable", "expandable", "unique", "has_max_level",
+                       "port", "naval", "recruits_combat_units", "recruits_sailors", "aliases", "locator"],
         "fblock.title.": ["potential", "possible"],
         "fproblem.": ["key_missing", "key_invalid", "key_exists", "group_missing", "group_invalid", "icon_missing",
                       "city_type_invalid", "construction_invalid", "braces", "pmgs_missing", "pmg_key_missing",

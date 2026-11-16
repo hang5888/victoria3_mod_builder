@@ -956,28 +956,26 @@ const NUMBERS = ['levels_per_mesh', 'ai_nationalization_desire', 'residence_poin
 const OWNERSHIP = ['self', 'other', 'no_ownership'];
 let settingsTimer = null;
 
-// The warning shown above a field of a new factory, or null. Only for settings that make
-// a production building unusable or turn it into another kind of building.
-function settingWarning(key, value) {
-  if (editing.mode !== 'new') return null;
-  const yes = value === 'yes';
-  switch (key) {
-    case 'ownership_type':
-      if (value === 'self') return null;
-      return value === 'other' ? t('fset.warn.ownership_other') : t('fset.warn.ownership_none');
-    case 'terrain_manipulator': return typeof value === 'string' && value.startsWith('urban_') ? t('fset.warn.terrain_urban') : null;
-    case 'buildable': return value === 'no' ? t('fset.warn.buildable') : null;
-    case 'expandable': return value === 'no' ? t('fset.warn.expandable') : null;
-    case 'unique': return yes ? t('fset.warn.unique') : null;
-    case 'has_max_level': return yes ? t('fset.warn.has_max_level', { name: `state_${editing.key || 'building_x'}_max_level_add` }) : null;
-    case 'port': return yes ? t('fset.warn.port') : null;
-    case 'naval': return yes ? t('fset.warn.naval') : null;
-    case 'recruits_combat_units': return yes ? t('fset.warn.recruits_combat_units') : null;
-    case 'recruits_sailors': return yes ? t('fset.warn.recruits_sailors') : null;
-    case 'aliases': return Array.isArray(value) && value.length ? t('fset.warn.aliases') : null;
-    case 'locator': return value ? t('fset.warn.locator') : null;
-    default: return null;
-  }
+// Fields that can make a production building unusable or turn it into another kind of
+// building: each always has a yellow warning above it, and is marked while it is set to
+// the risky value (risky(value) is true).
+const WARNED = {
+  ownership_type: (value) => value !== 'self',
+  terrain_manipulator: (value) => typeof value === 'string' && value.startsWith('urban_'),
+  buildable: (value) => value === 'no',
+  expandable: (value) => value === 'no',
+  unique: (value) => value === 'yes',
+  has_max_level: (value) => value === 'yes',
+  port: (value) => value === 'yes',
+  naval: (value) => value === 'yes',
+  recruits_combat_units: (value) => value === 'yes',
+  recruits_sailors: (value) => value === 'yes',
+  aliases: (value) => Array.isArray(value) && value.length > 0,
+  locator: (value) => Boolean(value),
+};
+
+function settingWarning(key) {
+  return t('fset.warn.' + key, { name: `state_${editing.key || 'building_x'}_max_level_add` });
 }
 
 function setSetting(key, line) {
@@ -998,9 +996,9 @@ function terrainOptions() {
 }
 
 function settingField(key, control, value, hint) {
-  const warning = settingWarning(key, value);
-  return h('div', { class: 'setting' + (warning ? ' warned' : '') },
-    warning && h('div', { class: 'setting-warn' }, '⚠ ', warning),
+  const risky = key in WARNED && WARNED[key](value);
+  return h('div', { class: 'setting' + (risky ? ' warned' : '') },
+    key in WARNED && h('div', { class: 'setting-warn' }, risky && '⚠ ', settingWarning(key)),
     h('label', { class: 'field' },
       h('span', { class: 'field-label' }, t('fset.label.' + key), h('span', { class: 'mono muted small' }, ` ${key}`)),
       control,

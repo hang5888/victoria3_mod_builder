@@ -102,18 +102,18 @@ pm_bakery = {
 
 「其他腳本」裡常用的欄位做成表單。值仍存在其他腳本裡：表單讀取腳本、改動時只改寫那一行（沒設定就刪掉那一行），兩邊隨時一致，其他內容和註解不受影響。腳本括號不成對時表單停用。
 
-| 欄位 | 控制項 | 新工廠的黃字警告（顯示在欄位上方，不彈窗） |
+| 欄位 | 控制項 | 黃字警告的內容；括號內是會標出 ⚠ 和外框的值 |
 | --- | --- | --- |
-| `ownership_type` | 下拉：self／other／no_ownership／未設定 | 不是 self：沒人能投資擁有，或是公司總部類的設定 |
-| `terrain_manipulator` | 下拉：已加載建築用到的值 | `urban_*`：城市中心、港口專用 |
+| `ownership_type` | 下拉：self／other／no_ownership／未設定 | 生產建築應設為 self（不是 self 時） |
+| `terrain_manipulator` | 下拉：已加載建築用到的值 | 城市中心、港口專用的外觀（`urban_*`） |
 | `levels_per_mesh`、`ai_nationalization_desire`、`residence_points_per_level` | 數字 | 無 |
-| `buildable`、`expandable`、`downsizeable` | 勾選（預設是） | 取消 `buildable`、`expandable` 時 |
-| `unique`、`has_max_level`、`port`、`naval`、`recruits_combat_units`、`recruits_sailors` | 勾選（預設否） | 勾選時，說明是奇觀／港口／軍事建築專用，或 `has_max_level` 會讓上限為 0 |
-| `aliases` | 文字（空格分隔） | 有值時：原版建築的舊名稱，會衝突 |
-| `locator` | 文字 | 有值時：奇觀的地圖位置 |
+| `buildable`、`expandable`、`downsizeable` | 勾選（預設是） | `buildable`、`expandable`：取消後的影響（取消時） |
+| `unique`、`has_max_level`、`port`、`naval`、`recruits_combat_units`、`recruits_sailors` | 勾選（預設否） | 奇觀／港口／軍事建築專用；`has_max_level` 會讓上限為 0（勾選時） |
+| `aliases` | 文字（空格分隔） | 原版建築的舊名稱，會衝突（有值時） |
+| `locator` | 文字 | 奇觀的地圖位置（有值時） |
 
 - 勾選類只寫出和遊戲預設不同的值。
-- 警告只對新工廠顯示；覆蓋現有建築時這些設定是原本的行為，不警告。
+- 黃字警告一直顯示在欄位上方（不彈窗），讓人在改之前就知道影響；設成會出問題的值時，警告前加上 ⚠、文字加粗，欄位加上黃框。新工廠和覆蓋現有建築都一樣顯示。
 
 ### 3.3 編輯區：生產方式組
 
