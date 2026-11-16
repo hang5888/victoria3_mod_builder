@@ -233,6 +233,8 @@ class GameData:
             self.group_info[key] = {name: block.get(name) == "yes"
                                     for name in ("always_possible", "is_subsistence", "capped_by_resources")}
             self.group_info[key]["rural"] = block.get("land_usage") == "rural"
+            funded = block.get("is_government_funded")  # yes / no, or None to take the parent group's
+            self.group_info[key]["funded"] = funded == "yes" if funded in ("yes", "no") else None
             lens = block.get("lens")
             if isinstance(lens, str):
                 self.lenses.add(lens)
@@ -483,6 +485,8 @@ class GameData:
                 # needs arable land or a resource in the state region
                 "needs_resources": (not any(f["always_possible"] for f in flags)
                                     and any(f["rural"] or f["capped_by_resources"] for f in flags)),
+                # the state pays the wages and inputs (government buildings, monuments); the nearest group that says
+                "government_funded": next((f["funded"] for f in flags if f["funded"] is not None), False),
             })
 
         buildings = []

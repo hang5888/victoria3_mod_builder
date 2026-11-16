@@ -563,5 +563,8 @@
   "factory.estimate_wage_rate": "Wage rate (10000 laborers a week)",
   "factory.estimate_wages": "Wages",
   "factory.estimate_after_wages": "Profit after wages",
-  "factory.after_wages_short": "after wages (standard of living {level})"
+  "factory.after_wages_short": "after wages (standard of living {level})",
+  "factory.estimate_spending": "State spending a week",
+  "factory.spending_short": "State spending a week (standard of living {level})",
+  "factory.estimate_funded_hint": "The state funds this building (as monuments and government buildings): it pays the wages and the inputs from its budget, so instead of a profit this shows what the state pays a week (inputs − outputs + wages). In the game, government wages follow the country's normal wage and the government wage setting of the budget."
 }

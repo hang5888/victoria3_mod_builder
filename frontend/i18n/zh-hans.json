@@ -563,5 +563,8 @@
   "factory.estimate_wage_rate": "工资率（每万名工人每周）",
   "factory.estimate_wages": "工资",
   "factory.estimate_after_wages": "扣除工资后的利润",
-  "factory.after_wages_short": "扣除工资后（生活水平 {level}）"
+  "factory.after_wages_short": "扣除工资后（生活水平 {level}）",
+  "factory.estimate_spending": "政府每周支出",
+  "factory.spending_short": "政府每周支出（生活水平 {level}）",
+  "factory.estimate_funded_hint": "这座建筑由政府出资（例如奇观、政府建筑）：工资和投入由国家预算支付，所以不显示利润，而是显示国家每周要付多少（投入 − 产出 + 工资）。游戏里政府建筑的工资按国家的正常工资和预算中的政府工资设置决定。"
 }

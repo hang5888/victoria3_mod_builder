@@ -544,21 +544,41 @@ function estimate(factory) {
   });
   const line = (label, value, tone) => h('div', { class: 'estimate-line' },
     h('span', { class: 'muted' }, label), h('b', { class: tone || '' }, value));
+  const funded = governmentFunded(factory);
+  const flow = rows('inputs').length > 0 || rows('outputs').length > 0;
   return h('div', { class: 'preview-group' },
     h('h4', {}, t('factory.estimate')),
     groups,
-    h('div', { class: 'pm-flow' }, goodsAmounts(rows('inputs')), h('span', { class: 'muted' }, '→'), goodsAmounts(rows('outputs'))),
+    flow && h('div', { class: 'pm-flow' }, goodsAmounts(rows('inputs')), h('span', { class: 'muted' }, '→'),
+      goodsAmounts(rows('outputs'))),
     line(t('factory.estimate_input'), round(totals.input)),
     line(t('factory.estimate_output'), round(totals.output)),
-    line(t('factory.estimate_profit'), signed(totals.profit), tone(totals.profit)),
+    !funded && line(t('factory.estimate_profit'), signed(totals.profit), tone(totals.profit)),
     line(t('factory.estimate_jobs'), round(totals.jobs)),
-    wageLines(totals),
-    h('p', { class: 'muted small' }, t('factory.estimate_hint', { people: round(peoplePerWorker()) })));
+    wageLines(totals, funded),
+    h('p', { class: 'muted small' }, t('factory.estimate_hint', { people: round(peoplePerWorker()) })),
+    funded && h('p', { class: 'muted small' }, t('factory.estimate_funded_hint')));
 }
 
-// Wages at the chosen standard of living, and the profit after them. Typing a level updates the numbers in
-// place, so the field keeps its focus.
-function wageLines(totals) {
+// Government buildings and monuments: the state pays their wages and inputs, so there is no profit to show.
+function governmentFunded(building) {
+  const group = store.index.building_groups.get(building.building_group);
+  return Boolean(group && group.government_funded);
+}
+
+// The last line of the estimate, once wages are paid: the profit after them, or what the state pays a week.
+function afterWages(totals, pay, funded) {
+  if (funded) {
+    const spending = Math.round(totals.input - totals.output + pay);
+    return { label: t('factory.estimate_spending'), text: String(spending), tone: spending > 0 ? 'bad' : spending < 0 ? 'good' : '' };
+  }
+  const left = Math.round(totals.profit - pay);
+  return { label: t('factory.estimate_after_wages'), text: signed(left), tone: tone(left) };
+}
+
+// Wages at the chosen standard of living, and the profit (or state spending) after them. Typing a level
+// updates the numbers in place, so the field keeps its focus.
+function wageLines(totals, funded) {
   const levels = [...wageLevels().keys()];
   if (!levels.length) return null;
   const rate = h('b', {});
@@ -566,11 +586,11 @@ function wageLines(totals) {
   const after = h('b', {});
   const update = () => {
     const pay = wagesOf(totals.wageWeight);
-    const left = pay == null ? null : Math.round(totals.profit - pay);
+    const last = pay == null ? null : afterWages(totals, pay, funded);
     rate.textContent = String(Math.round(wageRate(wageLevel) || 0));
     wages.textContent = pay == null ? '—' : String(Math.round(pay));
-    after.textContent = left == null ? '—' : signed(left);
-    after.className = left == null ? '' : tone(left);
+    after.textContent = last ? last.text : '—';
+    after.className = last ? last.tone : '';
   };
   const input = h('input', {
     class: 'input mono level-input', type: 'number', min: String(Math.min(...levels)), max: String(Math.max(...levels)),
@@ -592,7 +612,7 @@ function wageLines(totals) {
     line(t('factory.estimate_sol'), input),
     line(t('factory.estimate_wage_rate'), rate),
     line(t('factory.estimate_wages'), wages),
-    line(t('factory.estimate_after_wages'), after));
+    line(funded ? t('factory.estimate_spending') : t('factory.estimate_after_wages'), after));
 }
 
 function costText(value) {
@@ -639,7 +659,7 @@ function renderPreview() {
           pmg && h('div', { class: 'chips' }, pmg.pms.map((pm) =>
             h('span', { class: 'chip' + (pm === first ? ' filled' : ''), title: pm.key }, entryName('pms', pm)))));
       })),
-    !isMonumentPage() && factory.pmgs.length > 0 && estimate(factory),
+    factory.pmgs.length > 0 && estimate(factory),
     conditionChips.length > 0 && h('div', { class: 'preview-group' },
       h('h4', {}, t('factory.conditions')), h('div', { class: 'chips' }, conditionChips)),
     h('div', { class: 'preview-group' },
@@ -1400,9 +1420,12 @@ function versionPicker(factory) {
 function factoryDetails(factory) {
   const shown = shownVersion(factory);
   const picked = pickedPms(shown).map((entry) => entry && pmOf(entry)).filter(Boolean);
-  const profit = sum(picked, (pm) => pmValue(pm).profit);
-  const pay = wagesOf(sum(picked, (pm) => pmValue(pm).wageWeight));
-  const afterWages = pay == null ? null : Math.round(profit - pay);
+  const totals = { input: 0, output: 0, profit: 0, wageWeight: 0 };
+  for (const pm of picked) for (const name of Object.keys(totals)) totals[name] += pmValue(pm)[name];
+  const { profit } = totals;
+  const funded = governmentFunded(shown);
+  const pay = wagesOf(totals.wageWeight);
+  const last = pay == null ? null : afterWages(totals, pay, funded);
   const monument = isMonumentPage();
   return h('div', { class: 'company-details' },
     factory.sources.length > 1 && versionPicker(factory),
@@ -1419,10 +1442,13 @@ function factoryDetails(factory) {
       return h('div', {}, h('span', { class: 'muted' }, `${entryName('pmgs', entry)}: `),
         pmg ? pmg.pms.map((pm) => entryName('pms', pm)).join(', ') : t('factory.missing', { key: entry.key }));
     }),
-    !monument && picked.length > 0 && h('div', {}, h('span', { class: 'muted' }, `${t('factory.estimate_profit')}: `),
+    !funded && picked.length > 0 && h('div', {}, h('span', { class: 'muted' }, `${t('factory.estimate_profit')}: `),
       h('b', { class: tone(profit) }, signed(profit)),
-      afterWages != null && [h('span', { class: 'muted' }, ` · ${t('factory.after_wages_short', { level: wageLevel })}: `),
-        h('b', { class: tone(afterWages) }, signed(afterWages))]),
+      last && [h('span', { class: 'muted' }, ` · ${t('factory.after_wages_short', { level: wageLevel })}: `),
+        h('b', { class: last.tone }, last.text)]),
+    funded && picked.length > 0 && last && h('div', {},
+      h('span', { class: 'muted' }, `${t('factory.spending_short', { level: wageLevel })}: `),
+      h('b', { class: last.tone }, last.text)),
     h('div', { class: 'muted small' }, `${sourceName(shown.source)} · ${shown.file}`),
     h('div', { class: 'row' },
       h('button', { class: 'btn', onclick: () => run(() => overrideFactory(shown)) }, t('company.override')),
