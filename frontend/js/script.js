@@ -92,6 +92,46 @@ export function blockText(key, lines) {
 
 export const isBlock = (value) => value !== null && typeof value === 'object';
 
+// Value of the last `key = value` in a script: a string, the items of a `key = { a b }` list,
+// null when the key is not there, undefined when the script cannot be read.
+export function scriptValue(text, key) {
+  const entries = parseScript(text);
+  if (!entries) return undefined;
+  const found = entries.filter((entry) => entry.key === key && entry.op === '=');
+  if (!found.length) return null;
+  const { value } = found[found.length - 1];
+  return isBlock(value) ? value.entries.filter((e) => e.key === null && typeof e.value === 'string').map((e) => e.value) : value;
+}
+
+// The script with `key` set to the given line (`key = value`), or removed when line is null.
+// The first statement of the key is replaced in place, the others removed; the rest of the
+// text, comments included, is left as it is.
+export function setScriptValue(text, key, line) {
+  const entries = parseScript(text);
+  if (!entries) return text;
+  const found = entries.filter((entry) => entry.key === key);
+  if (!found.length) {
+    if (line === null) return text;
+    const body = text.replace(/\s+$/, '');
+    return body ? `${body}\n${line}` : line;
+  }
+  let out = text;
+  for (const entry of [...found].reverse()) {
+    if (entry === found[0] && line !== null) {
+      out = out.slice(0, entry.start) + line + out.slice(entry.end);
+      continue;
+    }
+    // remove the statement, with its comment and the rest of the line when nothing else is on it
+    let start = entry.start;
+    let end = entry.end;
+    while (start > 0 && /[ \t]/.test(out[start - 1])) start--;
+    const rest = /^[ \t]*(#[^\n]*)?(\r?\n|$)/.exec(out.slice(end));
+    if (rest && (start === 0 || out[start - 1] === '\n')) end += rest[0].length;
+    out = out.slice(0, start) + out.slice(end);
+  }
+  return out.replace(/\s+$/, '');
+}
+
 // Same check as the backend's braces_balanced: { } match, ignoring strings and comments.
 export function bracesBalanced(text) {
   let depth = 0;

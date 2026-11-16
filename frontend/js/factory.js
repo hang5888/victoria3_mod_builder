@@ -10,7 +10,7 @@ import { store, refreshState, loadData, language, languageName, nameOf, factoryN
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
 import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
 import { thumb, objectIcon, pickerIcon } from './icons.js';
-import { bracesBalanced, parseScript, dedent } from './script.js';
+import { bracesBalanced, scriptValue, setScriptValue } from './script.js';
 import { STATE_KINDS, conditionEditor, clearConditionCache, countConditions, valueButton } from './conditions.js';
 import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, pickerItems, imageField,
   scriptArea as scriptBox } from './widgets.js';
@@ -307,36 +307,9 @@ function overrideFactory(factory) {
   return edit({ ...factory, mode: 'override', names: {} }, null, true);
 }
 
-// Fields of special buildings (ports, barracks, monuments…) that a new production building
-// must not keep: the game would treat it as one of those, or not let it be built.
-const SPECIAL_FIELDS = new Set(['aliases', 'buildable', 'expandable', 'downsizeable', 'has_max_level', 'port',
-  'naval', 'recruits_combat_units', 'recruits_sailors', 'residence_points_per_level', 'unique']);
-const SPECIAL_TERRAIN = /^urban_/;  // terrain_manipulator of city centres and ports
-
-function isSpecial(entry) {
-  return SPECIAL_FIELDS.has(entry.key)
-    || (entry.key === 'terrain_manipulator' && typeof entry.value === 'string' && SPECIAL_TERRAIN.test(entry.value));
-}
-
-// Special fields found in a script: the field names, in order.
-function specialFields(text) {
-  const entries = parseScript(text) || [];
-  return [...new Set(entries.filter(isSpecial).map((entry) => entry.key))];
-}
-
-// The script without its special fields. Untouched when there are none (keeps comments).
-function withoutSpecial(text) {
-  const entries = parseScript(text);
-  if (!entries || !entries.some(isSpecial)) return text;
-  return entries.filter((entry) => !isSpecial(entry)).map((entry) => dedent(text.slice(entry.start, entry.end))).join('\n');
-}
-
-async function copyFactory(factory) {
+function copyFactory(factory) {
   const names = knownName(factory) ? { [language()]: factory.name } : {};
-  const dropped = specialFields(factory.extra);
-  const extra = withoutSpecial(factory.extra);
-  await edit({ ...factory, mode: 'new', key: freeKey('factories', `${factory.key}_copy`), names, extra }, null, true);
-  if (dropped.length && editing && editing.extra === extra) toast(t('factory.special_removed', { fields: dropped.join(', ') }));
+  return edit({ ...factory, mode: 'new', key: freeKey('factories', `${factory.key}_copy`), names }, null, true);
 }
 
 async function save() {
@@ -470,8 +443,6 @@ function renderPreview() {
   if (factory.mode === 'new' && !Object.values(factory.names).some(Boolean)) notes.push(t('note.no_name'));
   const group = store.index.building_groups.get(factory.building_group);
   if (factory.mode === 'new' && group && group.needs_resources) notes.push(t('factory.resource_note'));
-  const special = factory.mode === 'new' ? specialFields(factory.extra) : [];
-  if (special.length) notes.push(t('factory.special_note', { fields: special.join(', ') }));
   const filled = store.state.languages.filter((l) => factory.names[l.key]);
   const conditionChips = RAW_BLOCKS.filter((name) => factory.blocks[name].trim()).map((name) =>
     h('span', { class: 'chip', title: name }, `${t('fblock.title.' + name)} · ${countConditions(factory.blocks[name])}`));
@@ -971,13 +942,138 @@ function aiSection() {
       scriptArea(() => factory.ai_value, (value) => { factory.ai_value = value; })]);
 }
 
+// ------------------------------------------------------- building settings
+//
+// Fields of the building that are often changed, as form controls. They live in the other
+// script (`editing.extra`): the controls read it and write single lines of it, so the two
+// always agree and anything else in the script is kept.
+
+// On/off fields and what the game does when they are not written.
+const FLAGS = [['buildable', true], ['expandable', true], ['downsizeable', true], ['unique', false],
+  ['has_max_level', false], ['port', false], ['naval', false], ['recruits_combat_units', false],
+  ['recruits_sailors', false]];
+const NUMBERS = ['levels_per_mesh', 'ai_nationalization_desire', 'residence_points_per_level'];
+const OWNERSHIP = ['self', 'other', 'no_ownership'];
+let settingsTimer = null;
+
+// The warning shown above a field of a new factory, or null. Only for settings that make
+// a production building unusable or turn it into another kind of building.
+function settingWarning(key, value) {
+  if (editing.mode !== 'new') return null;
+  const yes = value === 'yes';
+  switch (key) {
+    case 'ownership_type':
+      if (value === 'self') return null;
+      return value === 'other' ? t('fset.warn.ownership_other') : t('fset.warn.ownership_none');
+    case 'terrain_manipulator': return typeof value === 'string' && value.startsWith('urban_') ? t('fset.warn.terrain_urban') : null;
+    case 'buildable': return value === 'no' ? t('fset.warn.buildable') : null;
+    case 'expandable': return value === 'no' ? t('fset.warn.expandable') : null;
+    case 'unique': return yes ? t('fset.warn.unique') : null;
+    case 'has_max_level': return yes ? t('fset.warn.has_max_level', { name: `state_${editing.key || 'building_x'}_max_level_add` }) : null;
+    case 'port': return yes ? t('fset.warn.port') : null;
+    case 'naval': return yes ? t('fset.warn.naval') : null;
+    case 'recruits_combat_units': return yes ? t('fset.warn.recruits_combat_units') : null;
+    case 'recruits_sailors': return yes ? t('fset.warn.recruits_sailors') : null;
+    case 'aliases': return Array.isArray(value) && value.length ? t('fset.warn.aliases') : null;
+    case 'locator': return value ? t('fset.warn.locator') : null;
+    default: return null;
+  }
+}
+
+function setSetting(key, line) {
+  editing.extra = setScriptValue(editing.extra, key, line);
+  changed();
+  refresh('settings');
+  refresh('advanced');
+}
+
+// Values of terrain_manipulator the loaded buildings use.
+function terrainOptions() {
+  const values = new Set();
+  for (const factory of store.data.factories) {
+    const value = scriptValue(factory.extra, 'terrain_manipulator');
+    if (typeof value === 'string') values.add(value);
+  }
+  return [...values].sort();
+}
+
+function settingField(key, control, value, hint) {
+  const warning = settingWarning(key, value);
+  return h('div', { class: 'setting' + (warning ? ' warned' : '') },
+    warning && h('div', { class: 'setting-warn' }, '⚠ ', warning),
+    h('label', { class: 'field' },
+      h('span', { class: 'field-label' }, t('fset.label.' + key), h('span', { class: 'mono muted small' }, ` ${key}`)),
+      control,
+      hint && h('span', { class: 'muted small' }, hint)));
+}
+
+function settingsSection() {
+  const text = editing.extra;
+  if (scriptValue(text, 'ownership_type') === undefined) {
+    return section(t('fset.title'), null, h('p', { class: 'notice warn' }, t('fset.unreadable')));
+  }
+  const value = (key) => scriptValue(text, key);
+  const select = (key, options, label) => {
+    const current = value(key) || '';
+    const el = h('select', { class: 'input', onchange: () => setSetting(key, el.value ? `${key} = ${el.value}` : null) },
+      h('option', { value: '' }, t('fset.unset')),
+      [...new Set([...options, current].filter(Boolean))].map((option) => h('option', { value: option }, label(option))));
+    el.value = current;
+    return settingField(key, el, value(key), t('fset.hint.' + key));
+  };
+  const number = (key) => {
+    const current = value(key);
+    const el = h('input', {
+      class: 'input level', type: 'number', step: 'any', value: typeof current === 'string' ? current : '',
+      placeholder: t('fset.unset'),
+      onchange: () => setSetting(key, el.value.trim() ? `${key} = ${el.value.trim()}` : null),
+    });
+    return settingField(key, el, current, t('fset.hint.' + key));
+  };
+  const text_ = (key, quote) => {
+    const current = value(key);
+    const shown = Array.isArray(current) ? current.join(' ') : current || '';
+    const el = h('input', {
+      class: 'input mono', type: 'text', spellcheck: false, value: shown,
+      onchange: () => {
+        const typed = el.value.trim();
+        if (!typed) return setSetting(key, null);
+        return setSetting(key, quote ? `${key} = "${typed.replace(/"/g, '')}"` : `${key} = { ${typed.split(/\s+/).join(' ')} }`);
+      },
+    });
+    return settingField(key, el, current, t('fset.hint.' + key));
+  };
+  const flag = (key, fallback) => {
+    const current = value(key);
+    const on = current === null ? fallback : current === 'yes';
+    const el = h('label', { class: 'check' },
+      h('input', { type: 'checkbox', checked: on,
+        // only what differs from the game's default is written
+        onchange: (event) => setSetting(key, event.target.checked === fallback ? null : `${key} = ${event.target.checked ? 'yes' : 'no'}`) }),
+      fallback ? t('fset.default_yes') : t('fset.default_no'));
+    return settingField(key, el, current);
+  };
+  return section(t('fset.title'), t('fset.hint'),
+    h('div', { class: 'settings-grid' },
+      select('ownership_type', OWNERSHIP, (option) => (OWNERSHIP.includes(option) ? `${t('fset.ownership.' + option)} (${option})` : option)),
+      select('terrain_manipulator', terrainOptions(), (option) => option),
+      NUMBERS.map(number)),
+    h('div', { class: 'settings-grid flags' }, FLAGS.map(([key, fallback]) => flag(key, fallback))),
+    h('div', { class: 'settings-grid' }, text_('aliases', false), text_('locator', true)));
+}
+
 function advancedSection() {
   const factory = editing;
   return section(t('company.advanced'), null,
     h('div', { class: 'script-field' },
       h('span', { class: 'field-label' }, t('factory.other_script')),
       h('p', { class: 'muted small' }, t('factory.extra_hint')),
-      scriptArea(() => factory.extra, (value) => { factory.extra = value; })));
+      scriptArea(() => factory.extra, (value) => {
+        factory.extra = value;
+        // follow the typing in the settings above, without taking the focus away
+        clearTimeout(settingsTimer);
+        settingsTimer = setTimeout(() => { if (editing === factory) refresh('settings'); }, 300);
+      })));
 }
 
 const builders = {
@@ -987,6 +1083,7 @@ const builders = {
   pmgs: pmgsSection,
   conditions: conditionsSection,
   ai: aiSection,
+  settings: settingsSection,
   advanced: advancedSection,
 };
 
