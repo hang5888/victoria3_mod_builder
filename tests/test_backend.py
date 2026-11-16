@@ -17,6 +17,8 @@ from backend.factories import (factory_from_block, factory_to_script, modifier_t
                                pmg_to_script, validate_factory)
 from backend.gamedata import FileSystem, GameData, Source  # noqa: E402
 from backend.monuments import monument_to_script, normalize_monument, validate_monument  # noqa: E402
+from backend.laws import (law_from_block, law_to_script, normalize_law, start_script,  # noqa: E402
+                          stances_from_block, validate_law)
 from backend.localization import Localization, read_loc_file, read_loc_text  # noqa: E402
 from backend.mods import PROJECT_FILE  # noqa: E402
 from backend.pdx_script import braces_balanced, parse, split_prefix  # noqa: E402
@@ -369,6 +371,120 @@ class MonumentTest(unittest.TestCase):
                 normalize_monument({**monument, **change})
 
 
+LAW = """\
+law_test_rights = {
+	group = lawgroup_labor_rights
+	parent = law_regulatory_bodies # inherits the stances
+	icon = "gfx/interface/icons/law_icons/worker_protections.dds"
+	progressiveness = 75
+	unlocking_technologies = { human_rights }
+	disallowing_laws = { law_command_economy }
+	institution = institution_workplace_safety
+	institution_modifier = { building_minimum_wage_mult = 0.1 }
+	modifier = {
+		country_authority_add = -50
+		country_allow_voting_violent_hostility_bool = no
+	}
+	tax_modifier_low = { tax_land_add = 0.2 }
+	is_visible = { has_technology_researched = human_rights }
+	on_activate = { add_radicals = { value = 0.1 } }
+	ai_enact_weight_modifier = { value = 0 }
+	cultural_acceptance_rule = { always = yes }
+}
+"""
+
+
+def first_law(text):
+    entry = parse(text).entries[0]
+    return law_from_block(entry.key, entry.value)
+
+
+def sample_law(**changes):
+    law = first_law(LAW)
+    law.update(changes)
+    return law
+
+
+LAW_GAME = {"laws": {"law_no_workers_rights": "lawgroup_labor_rights", "law_regulatory_bodies": "lawgroup_labor_rights",
+                     "law_monarchy": "lawgroup_governance_principles"},
+            "groups": {"lawgroup_labor_rights", "lawgroup_governance_principles"}}
+
+
+class LawTest(unittest.TestCase):
+    def test_read_fields(self):
+        law = first_law(LAW)
+        self.assertEqual((law["group"], law["parent"], law["progressiveness"], law["institution"]),
+                         ("lawgroup_labor_rights", "law_regulatory_bodies", "75", "institution_workplace_safety"))
+        self.assertEqual(law["unlocking_technologies"], ["human_rights"])
+        self.assertEqual(law["modifiers"]["modifier"][1], {"key": "country_allow_voting_violent_hostility_bool",
+                                                           "value": "no"})
+        self.assertEqual(law["modifiers"]["tax_modifier_low"], [{"key": "tax_land_add", "value": "0.2"}])
+        self.assertEqual(law["blocks"]["on_activate"], "add_radicals = { value = 0.1 }")
+        self.assertEqual(law["extra"], "cultural_acceptance_rule = { always = yes }")  # unknown fields stay script
+
+    def test_round_trip(self):
+        law = first_law(LAW)
+        again = first_law(law_to_script(law))
+        self.assertEqual(again, law)
+        override = sample_law(mode="override")
+        self.assertTrue(law_to_script(override).startswith("REPLACE_OR_CREATE:law_test_rights = {"))
+
+    def test_unusual_blocks_stay_script(self):
+        law = first_law("law_x = { group = g modifier = { country_a = { b = c } } unlocking_laws = { a = b } }")
+        self.assertEqual(law["modifiers"]["modifier"], [])
+        self.assertEqual(law["extra"], "modifier = { country_a = { b = c } }\nunlocking_laws = { a = b }")
+
+    def test_stances(self):
+        block = parse("ideology_x = { icon = x lawgroup_a = { law_a = approve law_b = strongly_disapprove } }")
+        self.assertEqual(stances_from_block(block.entries[0].value),
+                         {"law_a": "approve", "law_b": "strongly_disapprove"})
+
+    def test_validate(self):
+        law = normalize_law(sample_law())
+        self.assertEqual(validate_law(law, LAW_GAME, []), [])
+        self.assertIn("key_exists", validate_law({**law, "key": "law_monarchy"}, LAW_GAME, []))
+        self.assertEqual(validate_law({**law, "key": "law_monarchy", "group": "lawgroup_governance_principles",
+                                       "parent": "", "mode": "override"}, LAW_GAME, []), [])
+        self.assertIn("group_unknown", validate_law({**law, "group": "lawgroup_x"}, LAW_GAME, []))
+        # the parent must be another law of the same group
+        self.assertIn("parent", validate_law({**law, "parent": "law_monarchy"}, LAW_GAME, []))
+        self.assertIn("parent", validate_law({**law, "parent": "law_test_rights"}, LAW_GAME, []))
+        mine = normalize_law(sample_law(key="law_mine", parent=""))
+        self.assertEqual(validate_law({**law, "parent": "law_mine"}, LAW_GAME, [mine]), [])
+        self.assertIn("progressiveness", validate_law({**law, "progressiveness": "high"}, LAW_GAME, []))
+        bad = {**law, "modifiers": {**law["modifiers"], "modifier": [{"key": "country_authority_add", "value": "x"}]}}
+        self.assertIn("modifier_value", validate_law(bad, LAW_GAME, []))
+        self.assertIn("braces:on_enact", validate_law({**law, "blocks": {**law["blocks"], "on_enact": "a = {"}},
+                                                      LAW_GAME, []))
+        default = {**law, "start": {"countries": [], "all": True, "default": True}}
+        self.assertIn("default_override", validate_law({**default, "mode": "override"}, LAW_GAME, []))
+        other = {**mine, "start": {"countries": [], "all": True, "default": True}}
+        self.assertEqual(sorted(validate_law({**default, "parent": ""}, LAW_GAME, [other])),
+                         ["all_twice", "default_twice"])
+
+    def test_normalize_drops_unsafe_input(self):
+        law = sample_law()
+        for bad in ({"group": "a b"}, {"unlocking_laws": ["x y"]}, {"start": {"countries": ["GB R"]}},
+                    {"modifiers": "x"}, {"parent": "law}"}):
+            with self.assertRaises(ValueError):
+                normalize_law({**law, **bad})
+        clean = normalize_law({**law, "names": {"english": " A  law ", "bad lang": "x"},
+                               "start": {"countries": ["GBR", "GBR"], "all": 1}})
+        self.assertEqual(clean["names"], {"english": "A law"})
+        self.assertEqual(clean["start"], {"countries": ["GBR"], "all": True, "default": False})
+
+    def test_start_script(self):
+        laws = [sample_law(key="law_a", start={"countries": ["GBR", "FRA"], "all": False, "default": False}),
+                sample_law(key="law_b", start={"countries": ["GBR"], "all": True, "default": False}),
+                sample_law(key="law_c")]
+        script = start_script(laws)[0]
+        root = parse(script).get("GLOBAL")
+        self.assertEqual([e.key for e in root.entries], ["every_country", "c:GBR", "c:FRA"])  # every country first
+        self.assertEqual([e.value for e in root.entries[1].value.entries], ["law_type:law_a", "law_type:law_b"])
+        self.assertIn("c:GBR ?= {", script)
+        self.assertEqual(start_script([sample_law()]), [])
+
+
 class LocalizationTest(unittest.TestCase):
     def test_read_and_clean(self):
         entries = read_loc_text('l_english:\n company_x:0 "The #b $other$#! Co." # note\n other: "Big"\n')["english"]
@@ -611,6 +727,40 @@ class ProjectTest(unittest.TestCase):
         self.assertIn("building_test_tower_throughput_add", english)
         self.assertEqual(project.load_project(folder)["monuments"], [tower, palace])
 
+    def test_laws(self):
+        folder = Path(project.create_project(str(self.mods), "Rights", "1.15.1"))
+        new = sample_law(names={"english": "Test Rights"}, descs={"english": "Workers get rights."},
+                         start={"countries": ["GBR"], "all": False, "default": False})
+        default = sample_law(key="law_test_default", names={"english": "Default"},
+                             start={"countries": [], "all": False, "default": True})
+        override = sample_law(key="law_no_workers_rights", mode="override", parent="",
+                              names={"english": "No Rights"}, descs={"simp_chinese": "没有权利"})
+        proj = project.load_project(folder)
+        proj["laws"] = [new, default, override]
+        generated = project.save_project(folder, proj)
+        self.assertEqual(sorted(generated), [
+            "common/history/global/zzz_rights_laws.txt",
+            "common/laws/00_00_rights_default_laws.txt",
+            "common/laws/zzz_rights_laws.txt",
+            "localization/english/replace/rights_laws_replace_l_english.yml",
+            "localization/english/rights_laws_l_english.yml",
+            "localization/simp_chinese/replace/rights_laws_replace_l_simp_chinese.yml"])
+        laws = parse((folder / "common/laws/zzz_rights_laws.txt").read_text(encoding="utf-8-sig"))
+        self.assertEqual([e.key for e in laws.entries], ["law_test_rights", "REPLACE_OR_CREATE:law_no_workers_rights"])
+        defaults = parse((folder / "common/laws/00_00_rights_default_laws.txt").read_text(encoding="utf-8-sig"))
+        self.assertEqual([e.key for e in defaults.entries], ["law_test_default"])
+        history = parse((folder / "common/history/global/zzz_rights_laws.txt").read_text(encoding="utf-8-sig"))
+        self.assertEqual(history.get("GLOBAL").get("c:GBR").get("activate_law"), "law_type:law_test_rights")
+        english = read_loc_file(folder / "localization/english/rights_laws_l_english.yml")["english"]
+        self.assertEqual(english, {"law_test_rights": "Test Rights", "law_test_rights_desc": "Workers get rights.",
+                                   "law_test_default": "Default"})
+        replaced = read_loc_file(folder / "localization/simp_chinese/replace/rights_laws_replace_l_simp_chinese.yml")
+        self.assertEqual(replaced["simp_chinese"], {"law_no_workers_rights_desc": "没有权利"})
+        self.assertEqual(project.load_project(folder)["laws"], [new, default, override])
+        # an override is never a default, whatever the project file says
+        proj["laws"] = [{**override, "start": {"countries": [], "all": False, "default": True}}]
+        self.assertNotIn("common/laws/00_00_rights_default_laws.txt", project.save_project(folder, proj))
+
     def test_stale_files_are_removed_but_nothing_else(self):
         folder = Path(project.create_project(str(self.mods), "Clean", "1.15.1"))
         mine = folder / "common" / "company_types" / "my_own_file.txt"
@@ -670,7 +820,14 @@ class InterfaceTextTest(unittest.TestCase):
         "error.": ["offline", "server_error", "not_loaded", "no_project", "folders_invalid", "bad_request",
                    "not_found", "name_missing", "browse_unavailable", "bad_path", "unsupported_texture",
                    "forbidden", "open_folder_failed", "image_kind", "image_too_large", "image_format"],
-        "sidebar.category.": ["company", "factory", "monument"],
+        "sidebar.category.": ["company", "factory", "monument", "law"],
+        "law.block.": ['is_visible', 'can_enact', 'on_enact', 'on_activate', 'on_deactivate', 'can_impose', 'ai_impose_chance', 'ai_will_do', 'ai_enact_weight_modifier'],
+        "law.block_hint.": ['is_visible', 'can_enact', 'on_enact', 'on_activate', 'on_deactivate', 'can_impose', 'ai_impose_chance', 'ai_will_do', 'ai_enact_weight_modifier'],
+        "law.list.": ['unlocking_technologies', 'unlocking_laws', 'requires_law_or', 'disallowing_laws'],
+        "law.list_hint.": ['unlocking_technologies', 'unlocking_laws', 'requires_law_or', 'disallowing_laws'],
+        "law.modifier_title.": ['modifier', 'institution_modifier', 'acceptance_modifier', 'tax_modifier_very_low', 'tax_modifier_low', 'tax_modifier_medium', 'tax_modifier_high', 'tax_modifier_very_high'],
+        "law.stance.": ["strongly_approve", "approve", "neutral", "disapprove", "strongly_disapprove"],
+        "lproblem.": ['key_missing', 'key_invalid', 'key_exists', 'group_missing', 'group_unknown', 'icon_missing', 'progressiveness', 'parent', 'modifier_value', 'default_override', 'default_twice', 'all_twice'],
         "factory.kind.": ["ref", "own", "override"],
         "factory.target.": ["building", "state", "country"],
         "factory.scale.": ["workforce_scaled", "level_scaled", "unscaled", "throughput_scaled"],

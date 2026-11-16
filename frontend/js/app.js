@@ -5,10 +5,12 @@ import { store, refreshState, setState, language } from './store.js';
 import { renderHome } from './home.js';
 import { renderCompany } from './company.js';
 import { renderFactory, renderMonument } from './factory.js';
+import { renderLaw } from './law.js';
 import { h, toast, errorText } from './ui.js';
 
 const view = document.getElementById('view');
-const routes = { home: renderHome, company: renderCompany, factory: renderFactory, monument: renderMonument };
+const routes = { home: renderHome, company: renderCompany, factory: renderFactory, monument: renderMonument,
+  law: renderLaw };
 
 function currentRoute() {
   const name = location.hash.replace(/^#\/?/, '');
@@ -22,7 +24,8 @@ function renderHeader() {
     h('a', { href: '#/', class: route === 'home' ? 'active' : '' }, t('nav.home')),
     h('a', { href: '#/company', class: route === 'company' ? 'active' : '' }, t('nav.company')),
     h('a', { href: '#/factory', class: route === 'factory' ? 'active' : '' }, t('nav.factory')),
-    h('a', { href: '#/monument', class: route === 'monument' ? 'active' : '' }, t('nav.monument')));
+    h('a', { href: '#/monument', class: route === 'monument' ? 'active' : '' }, t('nav.monument')),
+    h('a', { href: '#/law', class: route === 'law' ? 'active' : '' }, t('nav.law')));
   document.getElementById('project-label').textContent =
     state.project ? t('header.project', { name: state.project.name }) : '';
   document.getElementById('version-label').textContent =

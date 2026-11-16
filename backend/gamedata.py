@@ -5,6 +5,7 @@ from pathlib import Path
 
 from . import pdx_script
 from .companies import company_from_block
+from .laws import law_from_block, stances_from_block
 from .factories import (MODIFIER_SUFFIXES, MODIFIER_TEMPLATE_BUILDING, factory_from_block, pm_from_block,
                         pmg_from_block)
 from .localization import Localization, read_loc_file
@@ -28,6 +29,10 @@ BUILDING_ICON_DIR = "gfx/interface/icons/building_icons"
 BUILDING_BACKGROUND_DIR = "gfx/interface/icons/building_icons/backgrounds"
 PM_ICON_DIR = "gfx/interface/icons/production_method_icons"
 PMG_ICON_DIR = "gfx/interface/icons/generic_icons"
+LAW_ICON_DIR = "gfx/interface/icons/law_icons"
+# The columns of the game's law screen, in order (law_group_category of the law groups),
+# and the interface texts naming them.
+LAW_CATEGORIES = {"power_structure": "POWER_STRUCTURE", "economy": "ECONOMY", "human_rights": "HUMAN_RIGHTS"}
 # Building groups a factory can be put in: these and the groups below them.
 PRODUCTION_GROUPS = ("bg_manufacturing", "bg_agriculture", "bg_ranching", "bg_plantations", "bg_extraction")
 # Game objects only picked by key in the forms: payload name -> folder.
@@ -268,10 +273,6 @@ class GameData:
             self.pop_types[key] = {"icon": texture if isinstance(texture, str) else "",
                                    "wage_weight": _number(block.get("wage_weight"), 1.0),
                                    "working_adult_ratio": _number(block.get("working_adult_ratio"), None)}
-        self.laws = {}
-        for key, (block, _source, _file) in self.load_db("common/laws").items():
-            group = block.get("group")
-            self.laws[key] = {"group": group if isinstance(group, str) else ""}
         # construction_cost_x = 400 lines among the script values
         self.construction_costs = {}
         for source, path, rel_name in self.fs.list_files("common/script_values", ".txt"):
@@ -344,7 +345,37 @@ class GameData:
                 self.lenses.add(lens)
         self.key_lists["lenses"] = sorted(self.lenses)
         self._load_wages()
+        self._load_laws()
         self._load_map_objects()
+
+    def _load_laws(self):
+        """Laws with their groups, and what decides the interest groups' stances on them."""
+        self.law_groups = {}
+        for key, (block, _source, _file) in self.load_db("common/law_groups").items():
+            category = block.get("law_group_category")
+            self.law_groups[key] = {"category": category if isinstance(category, str) else ""}
+        self.laws = {}
+        origins = {}
+        # in the order the game reads them: the first law of a group is its default
+        for key, (block, source, rel_name) in self.load_db("common/laws", origins).items():
+            law = law_from_block(key, block)
+            law["source"] = source.id
+            law["file"] = rel_name
+            law["sources"] = [s.id for s, _b, _f in origins[key]]
+            law["versions"] = [{**law_from_block(key, b), "source": s.id, "file": f} for s, b, f in origins[key][:-1]]
+            self.laws[key] = law
+        self.ideologies = {key: stances_from_block(block)
+                           for key, (block, _source, _file) in self.load_db("common/ideologies").items()}
+        self.interest_groups = {}
+        for key, (block, _source, _file) in self.load_db("common/interest_groups").items():
+            texture, ideologies = block.get("texture"), block.get("ideologies")
+            self.interest_groups[key] = {
+                "icon": texture if isinstance(texture, str) else "",
+                "ideologies": ideologies.items() if isinstance(ideologies, Block) else []}
+        self.institutions = {}
+        for key, (block, _source, _file) in self.load_db("common/institutions").items():
+            icon = block.get("icon")
+            self.institutions[key] = {"icon": icon if isinstance(icon, str) else ""}
 
     def _load_wages(self):
         """What the factory estimate prices wages with: the cost of each wealth level's needs (the buy
@@ -441,6 +472,8 @@ class GameData:
         self.pm_icons = sorted(folder(PM_ICON_DIR) | {pm["texture"] for pm in self.pms.values() if pm["texture"]})
         self.pmg_icons = sorted({path for path in folder(PMG_ICON_DIR) if "/mixed_icon" in path}
                                 | {pmg["texture"] for pmg in self.pmgs.values() if pmg["texture"]})
+        self.law_icons = sorted(folder(LAW_ICON_DIR) | {v["icon"] for law in self.laws.values()
+                                                         for v in (law, *law["versions"]) if v["icon"]})
 
     # -------------------------------------------------------- localization
 
@@ -494,10 +527,21 @@ class GameData:
             root = group_root(info["group"])
             buildings.append({"key": key, "name": loc.name(key), "group": root, "icon": info["icon"],
                               "group_name": loc.name(root) if root else "", "used": key in used_buildings})
-        modifiers = [{"key": key, "name": loc.name(key), "used": key in used_modifiers, **info}
+        # laws in the order the game reads them; the first of each group is the default
+        laws, seen_groups, law_modifiers = [], set(), set()
+        for key, law in self.laws.items():
+            laws.append({**law, "name": loc.name(key), "desc": loc.name(f"{key}_desc", ""),
+                         "group_name": loc.name(law["group"]) if law["group"] else "",
+                         "default": law["group"] not in seen_groups})
+            seen_groups.add(law["group"])
+            law_modifiers.update(m["key"] for rows in law["modifiers"].values() for m in rows)
+        # "used": by a company; "law_used": by a law (for the pickers' "only used" switches)
+        modifiers = [{"key": key, "name": loc.name(key), "used": key in used_modifiers,
+                      "law_used": key in law_modifiers, **info}
                      for key, info in self.modifiers.items()]
-        for key in sorted(used_modifiers - set(self.modifiers)):
-            modifiers.append({"key": key, "name": loc.name(key), "used": True, "percent": False, "color": "neutral"})
+        for key in sorted((used_modifiers | law_modifiers) - set(self.modifiers)):
+            modifiers.append({"key": key, "name": loc.name(key), "used": key in used_modifiers,
+                              "law_used": key in law_modifiers, "percent": False, "color": "neutral"})
         states = [{"key": key, "name": loc.name(key), "region": s["region"], "sea": s["sea"]}
                   for key, s in self.states.items()]
         return {
@@ -513,8 +557,17 @@ class GameData:
             "pop_types": [{"key": key, "name": loc.name(key), **pop} for key, pop in self.pop_types.items()],
             "buy_packages": [[level, round(cost, 2)] for level, cost in sorted(self.buy_packages.items())],
             "working_adult_ratio": self.working_adult_ratio,
-            "laws": [{"key": key, "name": loc.name(key), "group_name": loc.name(law["group"]) if law["group"] else ""}
-                     for key, law in self.laws.items()],
+            "laws": laws,
+            "law_groups": [{"key": key, "name": loc.name(key), "category": group["category"]}
+                           for key, group in self.law_groups.items()],
+            "law_categories": [{"key": key, "name": loc.name(text)} for key, text in LAW_CATEGORIES.items()],
+            # only what the law pages need: stances on laws, and the ideologies interest groups start with
+            "ideologies": [{"key": key, "name": loc.name(key), "stances": stances}
+                           for key, stances in self.ideologies.items() if stances],
+            "interest_groups": [{"key": key, "name": loc.name(key), **ig} for key, ig in self.interest_groups.items()],
+            "institutions": [{"key": key, "name": loc.name(key), **institution}
+                             for key, institution in self.institutions.items()],
+            "law_icons": self.law_icons,
             "locators": [{"key": name, "x": x, "z": z} for name, (x, z) in self.locators.items()],
             "state_owners": self.state_owners,
             "construction_costs": [{"key": key, "value": value} for key, value in self.construction_costs.items()],

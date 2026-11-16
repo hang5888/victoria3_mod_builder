@@ -12,6 +12,7 @@ from pathlib import Path
 from .companies import LANGUAGE_PATTERN, company_to_script, empty_company
 from .factories import (factory_to_script, fill_factory, modifier_texts, own_pmgs, own_pms, pm_to_script,
                         pmg_to_script)
+from .laws import fill_law, is_default, law_texts, law_to_script, start_script
 from .localization import write_loc_file
 from .monuments import fill_monument, history_script, locators_script, monument_to_script
 from .mods import PROJECT_FILE, discover_mods
@@ -28,6 +29,7 @@ IMAGE_KINDS = {
     "building_background": (652, 256, "cover"),
     "pmg_icon": (120, 120, "contain"),
     "pm_icon": (104, 104, "contain"),
+    "law_icon": (302, 302, "contain"),
 }
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -66,7 +68,7 @@ def create_project(local_mod_dir, name, game_version):
     (folder / ".metadata" / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     project = {"tool": "vic-mod-builder", "format": FORMAT, "name": name, "slug": folder.name,
-               "companies": [], "factories": [], "monuments": [], "images": [], "generated_files": []}
+               "companies": [], "factories": [], "monuments": [], "laws": [], "images": [], "generated_files": []}
     save_project(folder, project)
     return str(folder)
 
@@ -84,6 +86,7 @@ def load_project(project_dir):
                             for c in project.get("companies", [])]
     project["factories"] = [fill_factory(f) for f in project.get("factories", [])]
     project["monuments"] = [fill_monument(m) for m in project.get("monuments", [])]
+    project["laws"] = [fill_law(law) for law in project.get("laws", [])]
     return project
 
 
@@ -125,6 +128,24 @@ def _write_names(root, slug, kind, items, generated, extra=lambda item, lang: {}
             rel = f"localization/{lang}/replace/{slug}_{kind}_replace_l_{lang}.yml"
             write_loc_file(root / rel, lang, replaced)
             generated.append(rel)
+
+
+def _write_texts(root, slug, kind, items, texts, generated):
+    """Localization where each item has several texts: `texts(item, lang)` -> {key: text}.
+
+    As in _write_names, the texts of overridden items go under replace/.
+    """
+    languages = {lang for item in items for field in ("names", "descs") for lang, text in item.get(field, {}).items()
+                 if text and LANGUAGE_PATTERN.match(lang)}
+    for lang in sorted(languages):
+        new, replaced = {}, {}
+        for item in items:
+            (replaced if item.get("mode") == "override" else new).update(texts(item, lang))
+        for entries, rel in ((new, f"localization/{lang}/{slug}_{kind}_l_{lang}.yml"),
+                             (replaced, f"localization/{lang}/replace/{slug}_{kind}_replace_l_{lang}.yml")):
+            if entries:
+                write_loc_file(root / rel, lang, entries)
+                generated.append(rel)
 
 
 def _image_ok(image):
@@ -187,6 +208,7 @@ def used_images(project):
     for building in buildings:
         used.update((building.get("icon"), building.get("background")))
     used.update(item.get("texture") for item in [*own_pmgs(buildings), *own_pms(buildings)])
+    used.update(law.get("icon") for law in project.get("laws", []))
     return used
 
 
@@ -237,6 +259,16 @@ def save_project(project_dir, project, modifier_templates=lambda lang: None, kee
     _write_names(root, slug, "monuments", [*monuments, *groups, *methods], generated,
                  lambda item, lang: (modifier_texts(item, lang, modifier_templates(lang))
                                      if item["key"] in monument_keys and "pmgs" in item else {}))
+
+    # Laws: a group's default law must be read before the game's own laws ("00_00" sorts first),
+    # the others last; starting laws go in the global history, which runs after all other history.
+    laws = project.get("laws", [])
+    _write_script(root, f"common/laws/00_00_{slug}_default_laws.txt",
+                  [law_to_script(law) for law in laws if is_default(law)], generated)
+    _write_script(root, f"common/laws/zzz_{slug}_laws.txt",
+                  [law_to_script(law) for law in laws if not is_default(law)], generated)
+    _write_script(root, f"common/history/global/zzz_{slug}_laws.txt", start_script(laws), generated)
+    _write_texts(root, slug, "laws", laws, law_texts, generated)
 
     # Imported images: pack the used ones, drop the others.
     used = used_images(project)

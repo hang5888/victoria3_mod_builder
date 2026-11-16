@@ -42,6 +42,20 @@ export function sourceBadges(item) {
   }, sourceName(id))));
 }
 
+// A modifier's value as the game shows it (percent or plain), and whether it is good or bad.
+export function formatModifier(modifier) {
+  const info = store.index.modifiers.get(modifier.key);
+  const value = Number(modifier.value);
+  if (modifier.value === '' || Number.isNaN(value)) return { text: modifier.value, tone: '' };
+  const sign = value > 0 ? '+' : '';
+  const text = info && info.percent ? `${sign}${Math.round(value * 10000) / 100}%` : `${sign}${value}`;
+  let tone = '';
+  if (info && info.color !== 'neutral' && value !== 0) {
+    tone = (value > 0) === (info.color === 'good') ? 'good' : 'bad';
+  }
+  return { text, tone };
+}
+
 export function objectChip(kind, key, ...extra) {
   return h('span', { class: 'chip', title: key }, objectIcon(kind, key), nameOf(kind, key), extra);
 }
@@ -76,6 +90,7 @@ const IMAGE_SIZES = {
   building_background: [652, 256, 'cover'],
   pmg_icon: [120, 120, 'contain'],
   pm_icon: [104, 104, 'contain'],
+  law_icon: [302, 302, 'contain'],
 };
 
 function readBase64(file) {

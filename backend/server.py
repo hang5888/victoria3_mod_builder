@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from . import mods, project, textures
 from .companies import normalize_company, validate_company
 from .factories import normalize_factory, own_keys, validate_factory
+from .laws import normalize_law, validate_law
 from .monuments import normalize_monument, validate_monument
 from .gamedata import GameData, game_languages
 
@@ -322,6 +323,15 @@ def api_post(app, path, body):
             proj["factories"] = [f for f in proj["factories"] if f["key"] != body.get("key")]
             app.save_project(path_, proj, body)
             return proj
+    if path == "/api/project/law":
+        return save_law(app, body)
+    if path == "/api/project/law/delete":
+        with app.lock:
+            path_ = app.require_project()
+            proj = project.load_project(path_)
+            proj["laws"] = [law for law in proj["laws"] if law["key"] != body.get("key")]
+            app.save_project(path_, proj, body)
+            return proj
     if path == "/api/project/image":
         try:
             data = base64.b64decode(str(body.get("data") or ""), validate=True)
@@ -390,6 +400,33 @@ def save_building(app, body, kind):
             proj[kind].append(clean)
         else:
             proj[kind][index] = clean
+        generated = app.save_project(path, proj, body)
+        return {"errors": [], "project": proj, "generated": generated, "dir": path}
+
+
+def save_law(app, body):
+    """Add or update one law in the current project and regenerate the mod files."""
+    if not isinstance(body.get("law"), dict):
+        raise ApiError("bad_request")
+    try:
+        clean = normalize_law(body["law"])
+    except (ValueError, TypeError, AttributeError):
+        raise ApiError("bad_request")
+    original_key = body.get("original_key") or clean["key"]
+    with app.lock:
+        data = app.require_data()
+        path = app.require_project()
+        proj = project.load_project(path)
+        others = [law for law in proj["laws"] if law["key"] != original_key]
+        game = {"laws": {key: law["group"] for key, law in data.laws.items()}, "groups": set(data.law_groups)}
+        errors = validate_law(clean, game, others)
+        if errors:
+            return {"errors": errors}
+        index = next((i for i, law in enumerate(proj["laws"]) if law["key"] == original_key), None)
+        if index is None:
+            proj["laws"].append(clean)
+        else:
+            proj["laws"][index] = clean
         generated = app.save_project(path, proj, body)
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
 

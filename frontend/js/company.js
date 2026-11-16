@@ -9,7 +9,7 @@ import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
 import { StateMap } from './map.js';
 import { ICON_KINDS, thumb } from './icons.js';
 import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, imageField as imagePicker,
-  scriptArea as scriptBox } from './widgets.js';
+  scriptArea as scriptBox, formatModifier } from './widgets.js';
 import { parseScript, bracesBalanced } from './script.js';
 import { COUNTRY_KINDS, STATE_KINDS, TARGET_KINDS, conditionEditor, clearConditionCache, countConditions,
   newRow, writeConditions, valueButton } from './conditions.js';
@@ -126,19 +126,6 @@ function problems(company) {
 function problemText(code) {
   if (code.startsWith('braces:')) return t('problem.braces', { name: code.slice(7) });
   return t('problem.' + code);
-}
-
-function formatModifier(modifier) {
-  const info = store.index.modifiers.get(modifier.key);
-  const value = Number(modifier.value);
-  if (modifier.value === '' || Number.isNaN(value)) return { text: modifier.value, tone: '' };
-  const sign = value > 0 ? '+' : '';
-  const text = info && info.percent ? `${sign}${Math.round(value * 10000) / 100}%` : `${sign}${value}`;
-  let tone = '';
-  if (info && info.color !== 'neutral' && value !== 0) {
-    tone = (value > 0) === (info.color === 'good') ? 'good' : 'bad';
-  }
-  return { text, tone };
 }
 
 const squash = (text) => text.replace(/\s+/g, ' ').trim();

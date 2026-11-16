@@ -316,7 +316,7 @@ select.input { padding-right: 4px; }
 
 /* --------------------------------------------------------- company builder */
 
-.view-company, .view-factory { overflow: hidden; }
+.view-company, .view-factory, .view-monument, .view-law { overflow: hidden; }
 .builder {
   display: grid;
   grid-template-columns: minmax(210px, 250px) minmax(260px, 320px) minmax(440px, 1fr) minmax(300px, 380px);
@@ -410,6 +410,58 @@ select.input { padding-right: 4px; }
 .btn.side-remove:hover { color: var(--bad); border-color: transparent; }
 .sidebar-actions { margin-top: auto; flex-direction: column; background: var(--panel-2); }
 .builder.sidebar-collapsed { grid-template-columns: 40px minmax(260px, 320px) minmax(440px, 1fr) minmax(300px, 380px); }
+
+/* laws: the board takes everything but the sidebar; the editor has no right column */
+.builder.law-board-mode { grid-template-columns: minmax(210px, 250px) minmax(0, 1fr); }
+.builder.law-board-mode.sidebar-collapsed { grid-template-columns: 40px minmax(0, 1fr); }
+.builder.law-edit { grid-template-columns: minmax(210px, 250px) minmax(280px, 360px) minmax(440px, 1fr); }
+.builder.law-edit.sidebar-collapsed { grid-template-columns: 40px minmax(280px, 360px) minmax(440px, 1fr); }
+.law-board { background: var(--bg); }
+.law-filters { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 8px; max-width: 760px; }
+.law-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.law-column { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.law-column-title { margin: 0; padding: 6px 10px; text-align: center; font-size: 15px; letter-spacing: 0.08em;
+  color: var(--text); background: linear-gradient(180deg, #4a2a2e, #351d21); border: 1px solid #5b3a3e; border-radius: var(--radius); }
+.law-group { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow: hidden; }
+.law-group.open { border-color: var(--panel-3); }
+.law-group-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0;
+  background: linear-gradient(180deg, #1f3a35, #182c29); color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.law-group-head:hover { background: linear-gradient(180deg, #24443e, #1b322e); }
+.law-group-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.law-group-icon { flex: none; width: 46px; height: 46px; object-fit: contain; }
+.law-group-icon.empty { border-radius: 50%; background: var(--panel-3); }
+.law-group-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.law-group-name { font-weight: 600; }
+.law-group-text .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.law-list { display: flex; flex-direction: column; gap: 2px; padding: 6px; }
+.law-row { display: flex; align-items: center; gap: 4px; border: 1px solid transparent; border-radius: var(--radius); }
+.law-row:hover { background: var(--panel-2); }
+.law-row.match { border-color: var(--accent); }
+.law-row-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 4px 6px; border: 0;
+  background: none; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.law-row-main .company-title { flex: 1; min-width: 0; }
+.law-icon { flex: none; width: 34px; height: 34px; object-fit: contain; }
+.law-icon.empty { border-radius: 50%; background: var(--panel-3); }
+.law-row > .btn { margin-right: 4px; flex: none; }
+.law-add { margin-top: 4px; justify-content: center; border-style: dashed; }
+.law-preview-art { display: flex; justify-content: center; padding: 8px; border-radius: var(--radius);
+  background: radial-gradient(circle, #24443e, #14161b 70%); }
+.law-preview-icon { width: 128px; height: 128px; object-fit: contain; }
+.law-preview-icon.empty { border-radius: 50%; background: var(--panel-3); }
+.law-progression { margin: 0; padding-left: 0; list-style: none; font-size: 13px; }
+.law-progression li { padding: 1px 4px; border-radius: 4px; }
+.law-progression li b { display: inline-block; min-width: 36px; text-align: right; color: var(--muted); font-weight: 600; }
+.law-progression li.current { background: var(--accent-soft); color: var(--accent); }
+.chip.good { color: var(--good); }
+.chip.bad { color: var(--bad); }
+.stance-table { display: flex; flex-direction: column; gap: 4px; }
+.stance-row { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border-radius: var(--radius); background: var(--panel-2); }
+.stance-row .grow { display: flex; flex-direction: column; min-width: 0; }
+.stance-icon { flex: none; width: 30px; height: 30px; object-fit: contain; }
+.law-modifiers { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--panel-2); }
+.law-example { margin: 6px 0 0; padding: 8px; white-space: pre-wrap; background: var(--bg); border-radius: var(--radius); font-size: 12px; }
+.law-version { flex: 1; align-items: center; }
+.law-special-none { display: none; }
 .col-sidebar.collapsed { padding: 0; overflow: hidden; }
 .side-strip {
   flex: 1;
@@ -705,8 +757,9 @@ img.broken { visibility: hidden; }
 .toast-error { border-left-color: var(--bad); }
 
 @media (max-width: 1240px) {
-  .view-company, .view-factory { overflow: auto; }
-  .builder, .builder.sidebar-collapsed { grid-template-columns: 1fr; height: auto; }
+  .view-company, .view-factory, .view-monument, .view-law { overflow: auto; }
+  .builder, .builder.sidebar-collapsed, .builder.law-board-mode, .builder.law-edit { grid-template-columns: 1fr; height: auto; }
+  .law-columns { grid-template-columns: 1fr; }
   .side-strip { flex-direction: row; padding: 10px 14px; }
   .side-strip-title { writing-mode: horizontal-tb; letter-spacing: 0; }
   .col { overflow: visible; }

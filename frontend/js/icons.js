@@ -4,7 +4,7 @@ import { iconOf } from './store.js';
 import { h } from './ui.js';
 
 // Kinds of game objects that have their own small icon.
-export const ICON_KINDS = new Set(['buildings', 'prestige_goods', 'technologies', 'goods', 'pop_types']);
+export const ICON_KINDS = new Set(['buildings', 'prestige_goods', 'technologies', 'goods', 'pop_types', 'laws']);
 const ICON_SIZE = 64;
 
 export function thumb(path, size, className) {
