@@ -310,7 +310,7 @@
   "fset.warn.buildable": "取消后玩家无法建造，只能由历史设定或脚本产生。",
   "fset.warn.expandable": "取消后无法扩建，建好后只有一级。",
   "fset.warn.unique": "奇观专用：勾选后全世界只能有一级，私人投资者也不会建造。",
-  "fset.warn.has_max_level": "游戏里没有任何东西提供 {name}，勾选后上限很可能是 0，工厂一级都盖不了。",
+  "fset.warn.has_max_level": "勾选后等级上限可能是 0，一级都盖不了。",
   "fset.warn.port": "港口专用的设置：勾选后会连接不同的市场区域，每盖一座就等于多一个港口。",
   "fset.warn.naval": "军事建筑专用（海军而非陆军）。",
   "fset.warn.recruits_combat_units": "军营、征兵中心专用：建筑用来招募部队。",

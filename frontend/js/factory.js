@@ -975,7 +975,7 @@ const WARNED = {
 };
 
 function settingWarning(key) {
-  return t('fset.warn.' + key, { name: `state_${editing.key || 'building_x'}_max_level_add` });
+  return t('fset.warn.' + key);
 }
 
 function setSetting(key, line) {

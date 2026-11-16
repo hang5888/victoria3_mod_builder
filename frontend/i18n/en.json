@@ -310,7 +310,7 @@
   "fset.warn.buildable": "Unticked, players cannot build it; it only comes from history or scripts.",
   "fset.warn.expandable": "Unticked, it cannot be expanded and stays at one level.",
   "fset.warn.unique": "Monuments only: ticked, there is one level in the whole world and private investors never build it.",
-  "fset.warn.has_max_level": "Nothing in the game gives {name}. Ticked, the cap is probably 0 and not a single level can be built.",
+  "fset.warn.has_max_level": "Ticked, the level cap is likely 0: not a single level can be built.",
   "fset.warn.port": "A setting for ports only: ticked, it connects market areas, so every one built acts as another port.",
   "fset.warn.naval": "Military buildings only (navy instead of army).",
   "fset.warn.recruits_combat_units": "Barracks and conscription centres only: the building recruits units.",
