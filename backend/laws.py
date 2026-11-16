@@ -1,9 +1,13 @@
-"""Laws: converting between game script and the builder's data model.
+"""Laws and law groups: converting between game script and the builder's data model.
 
-A law belongs to an existing law group. Interest groups take their stance on a law from
-their ideologies, which this tool does not change: a new law gets stances only through its
-`parent`, whose stances it inherits (the game also treats it as a variant of the parent).
-Which laws countries start with belongs to the country starts (not made yet), not here.
+A law belongs to a law group: one of the game's, or a new one of the mod (existing groups are
+not changed). Interest groups take their stance on a law from their ideologies, which this
+tool does not change: a new law gets stances only through its `parent`, whose stances it
+inherits (the game also treats it as a variant of the parent); the laws of a new group have no
+parent, so every interest group is neutral about them.
+Which laws countries start with belongs to the country starts (not made yet), not here; in a
+new group, which no history sets, every country starts with the group's first law (the first
+one the mod made, as the laws are written in the order they were made).
 
 As with companies, fields without a real editor are kept as raw script text.
 """
@@ -250,3 +254,98 @@ def law_texts(law, lang):
     if law["descs"].get(lang):
         texts[f"{law['key']}_desc"] = law["descs"][lang]
     return texts
+
+
+# --------------------------------------------------------------- law groups
+
+GROUP_BLOCKS = ("enable", "change_allowed_trigger")
+INTEGER_PATTERN = re.compile(r"^\d+$")
+
+
+def empty_law_group():
+    return {"key": "", "mode": "new", "names": {}, "descs": {}, "category": "", "ideological_opinion_impact": "1",
+            "base_enactment_days": "", "enactment_approval_mult": "", "affected_by_regime_change": False,
+            "hierarchy": "", "blocks": {name: "" for name in GROUP_BLOCKS}, "extra": ""}
+
+
+def fill_law_group(stored):
+    """A law group from a project file, with fields added by later versions of the tool filled in."""
+    group = {**empty_law_group(), **stored}
+    group["blocks"] = {**empty_law_group()["blocks"], **(stored.get("blocks") or {})}
+    return group
+
+
+def normalize_law_group(raw):
+    """Bring a law group sent by the browser into the model's shape (ValueError when it cannot be)."""
+    group = empty_law_group()
+    group["key"] = str(raw.get("key") or "").strip()
+    group["names"] = clean_names(raw.get("names"))
+    group["descs"] = clean_names(raw.get("descs"))
+    for field in ("category", "ideological_opinion_impact", "base_enactment_days", "enactment_approval_mult",
+                  "hierarchy"):
+        group[field] = " ".join(str(raw.get(field) or "").split())
+    for field in ("category", "hierarchy"):
+        if group[field] and not KEY_PATTERN.match(group[field]):
+            raise ValueError(field)
+    group["affected_by_regime_change"] = bool(raw.get("affected_by_regime_change"))
+    blocks = raw.get("blocks") or {}
+    if not isinstance(blocks, dict):
+        raise ValueError("blocks")
+    for name in GROUP_BLOCKS:
+        group["blocks"][name] = str(blocks.get(name) or "").replace("\r\n", "\n")
+    group["extra"] = str(raw.get("extra") or "").replace("\r\n", "\n")
+    return group
+
+
+def validate_law_group(group, game, others):
+    """Error codes; empty means the group can be written.
+
+    `game`: {"groups": law group keys, "categories": law group categories, "hierarchies": social
+    hierarchy keys} of the loaded game data. `others`: the other law groups of the project.
+    """
+    errors = []
+    key = group["key"]
+    if not key:
+        errors.append("key_missing")
+    elif not KEY_PATTERN.match(key):
+        errors.append("key_invalid")
+    elif key in game["groups"] or any(other["key"] == key for other in others):
+        errors.append("key_exists")
+    if group["category"] not in game["categories"]:
+        errors.append("category")
+    if not NUMBER_PATTERN.match(group["ideological_opinion_impact"]):
+        errors.append("opinion_impact")
+    if group["base_enactment_days"] and not INTEGER_PATTERN.match(group["base_enactment_days"]):
+        errors.append("enactment_days")
+    if group["enactment_approval_mult"] and not NUMBER_PATTERN.match(group["enactment_approval_mult"]):
+        errors.append("approval_mult")
+    if group["hierarchy"] and group["hierarchy"] not in game["hierarchies"]:
+        errors.append("hierarchy")
+    for name in GROUP_BLOCKS:
+        if not braces_balanced(group["blocks"][name]):
+            errors.append(f"braces:{name}")
+    if not braces_balanced(group["extra"]):
+        errors.append("braces:extra")
+    return errors
+
+
+def law_group_to_script(group):
+    """Script text for one new law group, laid out as the game's."""
+    out = [f"{group['key']} = {{", f"\tlaw_group_category = {group['category']}"]
+    for field in ("base_enactment_days", "enactment_approval_mult"):
+        if group[field]:
+            out.append(f"\t{field} = {group[field]}")
+    out.append(f"\tideological_opinion_impact = {group['ideological_opinion_impact']}")
+    if group["affected_by_regime_change"]:
+        out.append("\taffected_by_regime_change = yes")
+    if group["hierarchy"]:
+        out.append(f"\tlinked_social_hierarchy = {group['hierarchy']}")
+    for name in GROUP_BLOCKS:
+        text = group["blocks"][name].strip("\n")
+        if text.strip():
+            out.extend(["", f"\t{name} = {{", _indent(text, 2), "\t}"])
+    extra = group["extra"].strip("\n")
+    if extra.strip():
+        out.extend(["", _indent(extra, 1)])
+    out.append("}")
+    return "\n".join(out)

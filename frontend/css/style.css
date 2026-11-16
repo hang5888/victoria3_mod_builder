@@ -447,6 +447,9 @@ select.input { padding-right: 4px; }
 .law-icon.empty { border-radius: 50%; background: var(--panel-3); }
 .law-row > .btn { margin-right: 4px; flex: none; }
 .law-add { margin-top: 4px; justify-content: center; border-style: dashed; }
+.law-group-edit { align-self: flex-start; margin: 2px 0 4px; }
+.readonly-value { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px;
+  border: 1px dashed var(--line); border-radius: var(--radius); color: var(--muted); }
 .law-preview-art { display: flex; justify-content: center; padding: 8px; border-radius: var(--radius);
   background: radial-gradient(circle, #24443e, #14161b 70%); }
 .law-preview-icon { width: 128px; height: 128px; object-fit: contain; }

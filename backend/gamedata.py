@@ -377,6 +377,9 @@ class GameData:
             self.interest_groups[key] = {
                 "icon": texture if isinstance(texture, str) else "",
                 "ideologies": ideologies.items() if isinstance(ideologies, Block) else []}
+        # social hierarchies a law group can be tied to (not the default one, which everybody is in)
+        self.social_hierarchies = [key for key, (block, _source, _file) in self.load_db("common/social_hierarchies").items()
+                                   if block.get("is_default") != "yes"]
         self.institutions = {}
         for key, (block, _source, _file) in self.load_db("common/institutions").items():
             icon = block.get("icon")
@@ -567,6 +570,7 @@ class GameData:
                             "hierarchy_name": loc.name(group["hierarchy"]) if group["hierarchy"] else ""}
                            for key, group in self.law_groups.items()],
             "law_categories": [{"key": key, "name": loc.name(text)} for key, text in LAW_CATEGORIES.items()],
+            "social_hierarchies": [{"key": key, "name": loc.name(key)} for key in self.social_hierarchies],
             # only what the law pages need: stances on laws, and the ideologies interest groups start with
             "ideologies": [{"key": key, "name": loc.name(key), "stances": stances}
                            for key, stances in self.ideologies.items() if stances],

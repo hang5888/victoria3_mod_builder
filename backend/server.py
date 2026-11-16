@@ -16,9 +16,9 @@ from urllib.parse import parse_qs, urlparse
 from . import mods, project, textures
 from .companies import normalize_company, validate_company
 from .factories import normalize_factory, own_keys, validate_factory
-from .laws import normalize_law, validate_law
+from .laws import normalize_law, normalize_law_group, validate_law, validate_law_group
 from .monuments import normalize_monument, validate_monument
-from .gamedata import GameData, game_languages
+from .gamedata import LAW_CATEGORIES, GameData, game_languages
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -325,6 +325,18 @@ def api_post(app, path, body):
             return proj
     if path == "/api/project/law":
         return save_law(app, body)
+    if path == "/api/project/law_group":
+        return save_law_group(app, body)
+    if path == "/api/project/law_group/delete":
+        # the group goes with the laws of the mod in it
+        with app.lock:
+            path_ = app.require_project()
+            proj = project.load_project(path_)
+            key = body.get("key")
+            proj["law_groups"] = [group for group in proj["law_groups"] if group["key"] != key]
+            proj["laws"] = [law for law in proj["laws"] if law["group"] != key]
+            app.save_project(path_, proj, body)
+            return proj
     if path == "/api/project/law/delete":
         with app.lock:
             path_ = app.require_project()
@@ -418,7 +430,8 @@ def save_law(app, body):
         path = app.require_project()
         proj = project.load_project(path)
         others = [law for law in proj["laws"] if law["key"] != original_key]
-        game = {"laws": {key: law["group"] for key, law in data.laws.items()}, "groups": set(data.law_groups)}
+        groups = set(data.law_groups) | {group["key"] for group in proj["law_groups"]}
+        game = {"laws": {key: law["group"] for key, law in data.laws.items()}, "groups": groups}
         errors = validate_law(clean, game, others)
         if errors:
             return {"errors": errors}
@@ -427,6 +440,40 @@ def save_law(app, body):
             proj["laws"].append(clean)
         else:
             proj["laws"][index] = clean
+        generated = app.save_project(path, proj, body)
+        return {"errors": [], "project": proj, "generated": generated, "dir": path}
+
+
+def save_law_group(app, body):
+    """Add or update one new law group in the current project and regenerate the mod files.
+
+    A renamed group takes the mod's laws in it along.
+    """
+    if not isinstance(body.get("group"), dict):
+        raise ApiError("bad_request")
+    try:
+        clean = normalize_law_group(body["group"])
+    except (ValueError, TypeError, AttributeError):
+        raise ApiError("bad_request")
+    original_key = body.get("original_key") or clean["key"]
+    with app.lock:
+        data = app.require_data()
+        path = app.require_project()
+        proj = project.load_project(path)
+        others = [group for group in proj["law_groups"] if group["key"] != original_key]
+        categories = set(LAW_CATEGORIES) | {group["category"] for group in data.law_groups.values()}
+        game = {"groups": set(data.law_groups), "categories": categories, "hierarchies": set(data.social_hierarchies)}
+        errors = validate_law_group(clean, game, others)
+        if errors:
+            return {"errors": errors}
+        index = next((i for i, group in enumerate(proj["law_groups"]) if group["key"] == original_key), None)
+        if index is None:
+            proj["law_groups"].append(clean)
+        else:
+            proj["law_groups"][index] = clean
+            for law in proj["laws"]:
+                if law["group"] == original_key:
+                    law["group"] = clean["key"]
         generated = app.save_project(path, proj, body)
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
 

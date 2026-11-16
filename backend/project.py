@@ -12,7 +12,7 @@ from pathlib import Path
 from .companies import LANGUAGE_PATTERN, company_to_script, empty_company
 from .factories import (factory_to_script, fill_factory, modifier_texts, own_pmgs, own_pms, pm_to_script,
                         pmg_to_script)
-from .laws import fill_law, law_texts, law_to_script
+from .laws import fill_law, fill_law_group, law_group_to_script, law_texts, law_to_script
 from .localization import write_loc_file
 from .monuments import fill_monument, history_script, locators_script, monument_to_script
 from .mods import PROJECT_FILE, discover_mods
@@ -68,7 +68,8 @@ def create_project(local_mod_dir, name, game_version):
     (folder / ".metadata" / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     project = {"tool": "vic-mod-builder", "format": FORMAT, "name": name, "slug": folder.name,
-               "companies": [], "factories": [], "monuments": [], "laws": [], "images": [], "generated_files": []}
+               "companies": [], "factories": [], "monuments": [], "laws": [], "law_groups": [], "images": [],
+               "generated_files": []}
     save_project(folder, project)
     return str(folder)
 
@@ -87,6 +88,7 @@ def load_project(project_dir):
     project["factories"] = [fill_factory(f) for f in project.get("factories", [])]
     project["monuments"] = [fill_monument(m) for m in project.get("monuments", [])]
     project["laws"] = [fill_law(law) for law in project.get("laws", [])]
+    project["law_groups"] = [fill_law_group(group) for group in project.get("law_groups", [])]
     return project
 
 
@@ -260,9 +262,12 @@ def save_project(project_dir, project, modifier_templates=lambda lang: None, kee
                  lambda item, lang: (modifier_texts(item, lang, modifier_templates(lang))
                                      if item["key"] in monument_keys and "pmgs" in item else {}))
 
-    laws = project.get("laws", [])
+    # Laws in the order they were made: in a new group the first one is the default.
+    laws, law_groups = project.get("laws", []), project.get("law_groups", [])
+    _write_script(root, f"common/law_groups/zzz_{slug}_law_groups.txt",
+                  [law_group_to_script(group) for group in law_groups], generated)
     _write_script(root, f"common/laws/zzz_{slug}_laws.txt", [law_to_script(law) for law in laws], generated)
-    _write_texts(root, slug, "laws", laws, law_texts, generated)
+    _write_texts(root, slug, "laws", [*law_groups, *laws], law_texts, generated)  # key and key_desc for both
 
     # Imported images: pack the used ones, drop the others.
     used = used_images(project)

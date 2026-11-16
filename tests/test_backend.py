@@ -17,8 +17,8 @@ from backend.factories import (factory_from_block, factory_to_script, modifier_t
                                pmg_to_script, validate_factory)
 from backend.gamedata import FileSystem, GameData, Source  # noqa: E402
 from backend.monuments import monument_to_script, normalize_monument, validate_monument  # noqa: E402
-from backend.laws import (law_from_block, law_to_script, normalize_law,  # noqa: E402
-                          stances_from_block, validate_law)
+from backend.laws import (law_from_block, law_group_to_script, law_to_script, normalize_law,  # noqa: E402
+                          normalize_law_group, stances_from_block, validate_law, validate_law_group)
 from backend.localization import Localization, read_loc_file, read_loc_text  # noqa: E402
 from backend.mods import PROJECT_FILE  # noqa: E402
 from backend.pdx_script import braces_balanced, parse, split_prefix  # noqa: E402
@@ -468,6 +468,46 @@ class LawTest(unittest.TestCase):
         self.assertNotIn("start", clean)
 
 
+GROUP_GAME = {"groups": {"lawgroup_labor_rights"}, "categories": {"power_structure", "economy", "human_rights"},
+              "hierarchies": {"edo_system"}}
+
+
+def sample_group(**changes):
+    group = normalize_law_group({"key": "lawgroup_test", "category": "economy", "names": {"english": "Test Group"},
+                                 "ideological_opinion_impact": "0.5", "base_enactment_days": "200",
+                                 "affected_by_regime_change": True, "hierarchy": "edo_system",
+                                 "blocks": {"enable": "any_scope_state = { is_coastal = yes }"}})
+    group.update(changes)
+    return group
+
+
+class LawGroupTest(unittest.TestCase):
+    def test_script(self):
+        block = parse(law_group_to_script(sample_group())).get("lawgroup_test")
+        self.assertEqual([(e.key, e.value if isinstance(e.value, str) else "{}") for e in block.entries], [
+            ("law_group_category", "economy"), ("base_enactment_days", "200"), ("ideological_opinion_impact", "0.5"),
+            ("affected_by_regime_change", "yes"), ("linked_social_hierarchy", "edo_system"), ("enable", "{}")])
+        self.assertEqual(block.get("enable").get("any_scope_state").get("is_coastal"), "yes")
+
+    def test_validate(self):
+        self.assertEqual(validate_law_group(sample_group(), GROUP_GAME, []), [])
+        self.assertIn("key_exists", validate_law_group(sample_group(key="lawgroup_labor_rights"), GROUP_GAME, []))
+        self.assertIn("key_exists", validate_law_group(sample_group(), GROUP_GAME, [sample_group()]))
+        self.assertIn("category", validate_law_group(sample_group(category="space"), GROUP_GAME, []))
+        self.assertIn("opinion_impact", validate_law_group(sample_group(ideological_opinion_impact=""), GROUP_GAME, []))
+        self.assertIn("enactment_days", validate_law_group(sample_group(base_enactment_days="1.5"), GROUP_GAME, []))
+        self.assertIn("approval_mult", validate_law_group(sample_group(enactment_approval_mult="x"), GROUP_GAME, []))
+        self.assertIn("hierarchy", validate_law_group(sample_group(hierarchy="caste"), GROUP_GAME, []))
+        self.assertIn("braces:enable", validate_law_group(sample_group(blocks={"enable": "a = {",
+                                                                               "change_allowed_trigger": ""}),
+                                                          GROUP_GAME, []))
+
+    def test_normalize_drops_unsafe_input(self):
+        for bad in ({"category": "a b"}, {"hierarchy": "x}"}, {"blocks": "x"}):
+            with self.assertRaises(ValueError):
+                normalize_law_group({"key": "lawgroup_x", **bad})
+
+
 class LocalizationTest(unittest.TestCase):
     def test_read_and_clean(self):
         entries = read_loc_text('l_english:\n company_x:0 "The #b $other$#! Co." # note\n other: "Big"\n')["english"]
@@ -735,6 +775,26 @@ class ProjectTest(unittest.TestCase):
         project.save_project(folder, proj)
         self.assertEqual(project.load_project(folder)["laws"], [new])
 
+    def test_law_groups(self):
+        folder = Path(project.create_project(str(self.mods), "Groups", "1.15.1"))
+        group = sample_group(descs={"english": "A new group."})
+        first = sample_law(key="law_first", group="lawgroup_test", parent="", names={"english": "First"})
+        second = sample_law(key="law_second", group="lawgroup_test", parent="")
+        proj = project.load_project(folder)
+        proj["law_groups"], proj["laws"] = [group], [first, second]
+        generated = project.save_project(folder, proj)
+        self.assertIn("common/law_groups/zzz_groups_law_groups.txt", generated)
+        groups = parse((folder / "common/law_groups/zzz_groups_law_groups.txt").read_text(encoding="utf-8-sig"))
+        self.assertEqual([e.key for e in groups.entries], ["lawgroup_test"])
+        # the laws keep the order they were made in: the first is the group's default
+        laws = parse((folder / "common/laws/zzz_groups_laws.txt").read_text(encoding="utf-8-sig"))
+        self.assertEqual([e.key for e in laws.entries], ["law_first", "law_second"])
+        english = read_loc_file(folder / "localization/english/groups_laws_l_english.yml")["english"]
+        self.assertEqual(english, {"lawgroup_test": "Test Group", "lawgroup_test_desc": "A new group.",
+                                   "law_first": "First"})
+        reopened = project.load_project(folder)
+        self.assertEqual((reopened["law_groups"], reopened["laws"]), ([group], [first, second]))
+
     def test_stale_files_are_removed_but_nothing_else(self):
         folder = Path(project.create_project(str(self.mods), "Clean", "1.15.1"))
         mine = folder / "common" / "company_types" / "my_own_file.txt"
@@ -794,7 +854,10 @@ class InterfaceTextTest(unittest.TestCase):
         "error.": ["offline", "server_error", "not_loaded", "no_project", "folders_invalid", "bad_request",
                    "not_found", "name_missing", "browse_unavailable", "bad_path", "unsupported_texture",
                    "forbidden", "open_folder_failed", "image_kind", "image_too_large", "image_format"],
-        "sidebar.category.": ["company", "factory", "monument", "law"],
+        "sidebar.category.": ["company", "factory", "monument", "law", "law_group"],
+        "lgroup.block.": ["enable", "change_allowed_trigger"],
+        "lgroup.block_hint.": ["enable", "change_allowed_trigger"],
+        "gproblem.": ['key_missing', 'key_invalid', 'key_exists', 'category', 'opinion_impact', 'enactment_days', 'approval_mult', 'hierarchy'],
         "law.block.": ['is_visible', 'can_enact', 'on_enact', 'on_activate', 'on_deactivate', 'can_impose', 'ai_impose_chance', 'ai_will_do', 'ai_enact_weight_modifier'],
         "law.block_hint.": ['is_visible', 'can_enact', 'on_enact', 'on_activate', 'on_deactivate', 'can_impose', 'ai_impose_chance', 'ai_will_do', 'ai_enact_weight_modifier'],
         "law.list.": ['unlocking_technologies', 'unlocking_laws', 'requires_law_or', 'disallowing_laws'],

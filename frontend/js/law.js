@@ -3,8 +3,8 @@
 // preview on the left, editor in the middle, ✕ back to the board.
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { store, refreshState, loadData, language, languageName, nameOf, lawName, setProject, editingImages,
-  keptImages } from './store.js';
+import { store, refreshState, loadData, language, languageName, nameOf, lawName, lawGroupName, setProject,
+  editingImages, keptImages } from './store.js';
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
 import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
 import { thumb } from './icons.js';
@@ -40,7 +40,8 @@ const TAX_GROUP = 'lawgroup_taxation';
 const CITIZENSHIP_GROUP = 'lawgroup_citizenship';
 
 let root = null;
-let editing = null;        // the law in the editor; null shows the board
+let editing = null;        // the law or law group in the editor; null shows the board
+let editingKind = 'law';   // what `editing` is: 'law' or 'group'
 let originalKey = null;    // its key in the project file, when it was opened from there
 let editingProject = null; // folder of the project `editing` belongs to
 let dirty = false;
@@ -99,9 +100,12 @@ export async function renderLaw(container) {
   renderSidebar(els.sidebar, sidebarEditor);
   renderPage();
   // an item of this page clicked in the sidebar of another page
-  const wanted = takePending('law');
-  const law = wanted && wanted !== originalKey && (store.project.laws || []).find((l) => l.key === wanted);
-  if (law) await edit(law, law.key);
+  const wantedLaw = takePending('law');
+  const wantedGroup = takePending('law_group');
+  const law = wantedLaw && projectLaws().find((l) => l.key === wantedLaw);
+  const group = wantedGroup && projectGroups().find((g) => g.key === wantedGroup);
+  if (law && !(editingKind === 'law' && originalKey === law.key)) await edit(law, law.key);
+  if (group && !(editingKind === 'group' && originalKey === group.key)) await editGroup(group, group.key);
 }
 
 // The board, or the editor with its preview.
@@ -125,6 +129,19 @@ function renderPage() {
 // ----------------------------------------------------------------- helpers
 
 const projectLaws = () => store.project.laws || [];
+const projectGroups = () => store.project.law_groups || [];
+
+// A law group by its key, the game's or a new one of the mod, in the shape of the game's data
+// (`mine`: the mod's group); undefined when there is none.
+function groupOf(key) {
+  const game = store.index.law_groups.get(key);
+  if (game) return game;
+  const mine = projectGroups().find((group) => group.key === key);
+  return mine && {
+    key: mine.key, name: lawGroupName(mine), category: mine.category, hierarchy: mine.hierarchy,
+    hierarchy_name: mine.hierarchy ? nameOf('social_hierarchies', mine.hierarchy) : '', enable: mine.blocks.enable, mine,
+  };
+}
 
 function keyTaken(key) {
   return store.index.laws.has(key) || projectLaws().some((law) => law.key === key && law.key !== originalKey);
@@ -153,14 +170,19 @@ function lawNameOf(key) {
 }
 const rowName = (row) => (row.mine ? lawName(row.mine) : row.game.name || row.game.key);
 
-// The law the game uses for countries whose history sets none: the group's first law.
+// The law the game uses for countries whose history sets none: the group's first law. In a new
+// group of the mod that is the first law the mod made in it (the laws are written in that order).
 function defaultOf(group) {
-  const first = store.data.laws.find((law) => law.group === group && law.default);
+  const first = store.data.laws.find((law) => law.group === group && law.default)
+    || projectLaws().find((law) => law.group === group);
   return first ? first.key : '';
 }
 
 // Laws a law can take its stances from: the others of its group without a parent of their own.
+// None in a new group of the mod: its laws are neutral for everybody.
 function parentOptions(law) {
+  const group = groupOf(law.group);
+  if (!group || group.mine) return [];
   return groupRows(law.group).map(rowLaw).filter((other) => other.key !== law.key && !other.parent);
 }
 
@@ -223,6 +245,7 @@ function problems(law) {
     found.push('key_exists');
   }
   if (!law.group) found.push('group_missing');
+  else if (!groupOf(law.group)) found.push('group_unknown');
   if (!law.icon) found.push('icon_missing');
   if (law.progressiveness && !NUMBER_PATTERN.test(law.progressiveness)) found.push('progressiveness');
   if (law.parent) {
@@ -239,7 +262,7 @@ function problems(law) {
 
 function problemText(code) {
   if (code.startsWith('braces:')) return t('problem.braces', { name: code.slice(7) });
-  return t('lproblem.' + code);
+  return editingKind === 'group' ? t('gproblem.' + code) : t('lproblem.' + code);
 }
 
 function changed() {
@@ -250,16 +273,19 @@ function changed() {
 }
 
 function refresh(name) {
-  const fresh = builders[name]();
+  const fresh = (editingKind === 'group' ? groupBuilders : builders)[name]();
   sections[name].replaceWith(fresh);
   sections[name] = fresh;
 }
 
+const discardText = () => (editingKind === 'group' ? t('lgroup.discard_confirm') : t('law.discard_confirm'));
+
 // ---------------------------------------------------------- opening laws
 
 async function edit(law, key, isDirty = false) {
-  if (dirty && !(await confirmDialog(t('law.discard_confirm'), t('company.discard')))) return;
+  if (dirty && !(await confirmDialog(discardText(), t('company.discard')))) return;
   editing = modelOf(law);
+  editingKind = 'law';
   originalKey = key;
   dirty = isDirty;
   pristine = true;
@@ -284,8 +310,8 @@ function copyRow(row) {
   const desc = row.mine ? row.mine.descs[lang] : row.game.desc;
   return edit({
     ...source, mode: 'new', key, names: name ? { [lang]: name } : {}, descs: desc ? { [lang]: desc } : {},
-    // the copy thinks like the copied law: it takes the stances the copied law has
-    parent: source.parent || source.key,
+    // the copy thinks like the copied law: it takes the stances the copied law has (none in a new group)
+    parent: groupOf(source.group) && !groupOf(source.group).mine ? source.parent || source.key : '',
   }, null, true);
 }
 
@@ -307,7 +333,7 @@ async function save() {
 
 // Remove a law from the project; when it is the one being edited, go back to the board.
 async function remove(law) {
-  const current = law.key === originalKey;
+  const current = editingKind === 'law' && law.key === originalKey;
   const name = lawName(current ? editing : law);
   if (!(await confirmDialog(t('company.delete_confirm', { name }), t('company.delete')))) return;
   setProject(await api.post('/api/project/law/delete', { key: law.key, keep_images: keptImages(current ? 'law' : null) }));
@@ -323,21 +349,81 @@ async function remove(law) {
 }
 
 async function close() {
-  if (dirty && !(await confirmDialog(t('law.discard_confirm'), t('company.discard')))) return;
+  if (dirty && !(await confirmDialog(discardText(), t('company.discard')))) return;
   editing = null;
   originalKey = null;
   dirty = false;
   renderPage();
 }
 
-editingImages.set('law', () => (editing ? [editing.icon] : []));
+editingImages.set('law', () => (editing && editingKind === 'law' ? [editing.icon] : []));
 
-// What the sidebar needs from this page.
+// ---------------------------------------------------------- law groups
+
+function blankGroup(category) {
+  return {
+    key: '', mode: 'new', names: {}, descs: {}, category, ideological_opinion_impact: '1', base_enactment_days: '',
+    enactment_approval_mult: '', affected_by_regime_change: false, hierarchy: '',
+    blocks: { enable: '', change_allowed_trigger: '' }, extra: '',
+  };
+}
+
+async function editGroup(group, key, isDirty = false) {
+  if (dirty && !(await confirmDialog(discardText(), t('company.discard')))) return;
+  const blank = blankGroup('');
+  const model = structuredClone(group);
+  editing = { ...blank, ...model, blocks: { ...blank.blocks, ...model.blocks } };
+  editingKind = 'group';
+  originalKey = key;
+  dirty = isDirty;
+  pristine = true;
+  clearConditionCache();
+  renderPage();
+  els.middle.scrollTop = 0;
+}
+
+async function saveGroup() {
+  const result = await api.post('/api/project/law_group', { group: editing, original_key: originalKey,
+    keep_images: keptImages() });
+  if (result.errors.length) {
+    toast(result.errors.map(problemText).join('\n'), 'error');
+    return;
+  }
+  setProject(result.project);
+  originalKey = editing.key;
+  dirty = false;
+  renderLeft();
+  refresh('laws');  // laws can be added once the group is saved
+  refreshSidebar();
+  toast(t('company.saved', { dir: result.dir }));
+}
+
+// Remove a new law group, with the mod's laws in it.
+async function removeGroup(group) {
+  const current = editingKind === 'group' && group.key === originalKey;
+  const name = lawGroupName(current ? editing : group);
+  const count = projectLaws().filter((law) => law.group === group.key).length;
+  if (!(await confirmDialog(t('lgroup.delete_confirm', { name, count }), t('company.delete')))) return;
+  setProject(await api.post('/api/project/law_group/delete', { key: group.key, keep_images: keptImages() }));
+  const lost = editing && (current || (editingKind === 'law' && editing.group === group.key));
+  if (lost) {
+    dirty = false;
+    await close();
+  } else if (editing) {
+    refreshSidebar();
+  } else {
+    renderPage();
+  }
+  toast(t('company.deleted'));
+}
+
+// What the sidebar needs from this page: it edits laws and law groups.
 const sidebarEditor = {
   kind: 'law',
-  state: () => ({ key: originalKey, dirty }),
-  open: (law) => edit(law, law.key),
-  remove,
+  handles: (kind) => kind === 'law' || kind === 'law_group',
+  state: () => ({ key: originalKey, dirty, kind: editingKind === 'group' ? 'law_group' : 'law' }),
+  open: (item, kind) => (kind === 'law_group' ? editGroup(item, item.key) : edit(item, item.key)),
+  remove: (item, kind) => (kind === 'law_group' ? removeGroup(item) : remove(item)),
 };
 
 // ------------------------------------------------------------------- board
@@ -386,8 +472,10 @@ function renderColumns() {
   for (const group of data.law_groups) {
     if (!categories.some((c) => c.key === group.category)) categories.push({ key: group.category, name: group.category });
   }
+  // the game's groups, then the mod's new ones
+  const groups = [...data.law_groups, ...projectGroups().map((group) => groupOf(group.key))];
   fill(els.columns, categories.map((category) => {
-    const cards = data.law_groups.filter((group) => group.category === category.key).map((group) => {
+    const cards = groups.filter((group) => group.category === category.key).map((group) => {
       const rows = groupRows(group.key);
       const shown = filtering ? rows.filter(matches) : rows;
       if (filtering && !shown.length) return null;
@@ -395,7 +483,9 @@ function renderColumns() {
     }).filter(Boolean);
     return h('section', { class: 'law-column' },
       h('h3', { class: 'law-column-title' }, category.name || category.key),
-      cards.length ? cards : h('p', { class: 'muted small' }, t('law.no_match')));
+      cards.length ? cards : h('p', { class: 'muted small' }, t('law.no_match')),
+      !filtering && h('button', { class: 'btn law-add', onclick: () => run(() => editGroup(blankGroup(category.key), null)) },
+        `＋ ${t('lgroup.new')}`));
   }));
 }
 
@@ -417,10 +507,15 @@ function groupCard(group, rows, shown, filtering) {
         h('span', { class: 'law-group-name' }, group.name || group.key),
         first && h('span', { class: 'muted small' }, t('law.default_short', { name: rowName(first) })),
         groupLimits(group).length > 0 && h('span', { class: 'badges' }, groupLimits(group).map(limitBadge))),
-      changes > 0 && h('span', { class: 'badge accent', title: t('law.changed_hint') }, t('law.changed', { count: changes })),
+      group.mine
+        ? h('span', { class: 'badge accent' }, t('law.added'))
+        : changes > 0 && h('span', { class: 'badge accent', title: t('law.changed_hint') }, t('law.changed', { count: changes })),
       h('span', { class: 'badge' }, String(rows.length)),
       !filtering && h('span', { class: 'side-caret' }, open ? '▾' : '▸')),
     open && h('div', { class: 'law-list' },
+      group.mine && h('button', { class: 'btn small law-group-edit', onclick: () => run(() => editGroup(group.mine, group.key)) },
+        t('lgroup.edit')),
+      group.mine && !rows.length && h('p', { class: 'muted small' }, t('lgroup.no_laws')),
       shown.map((row) => lawRow(row, fallback, Boolean(query))),
       h('button', { class: 'btn law-add', onclick: () => run(() => newLaw(group.key)) }, `＋ ${t('law.new')}`)));
 }
@@ -449,9 +544,15 @@ function renderLeft() {
   fill(els.left,
     h('div', { class: 'col-head' },
       h('h2', {}, t('company.editing')),
-      h('button', { class: 'btn primary', onclick: () => run(save) }, t('editor.save'))),
+      h('button', { class: 'btn primary', onclick: () => run(editingKind === 'group' ? saveGroup : save) },
+        t('editor.save'))),
     els.preview);
   renderPreview();
+}
+
+function renderPreview() {
+  if (editingKind === 'group') renderGroupPreview();
+  else renderLawPreview();
 }
 
 function modifierLines(rows) {
@@ -461,16 +562,17 @@ function modifierLines(rows) {
   }));
 }
 
-function renderPreview() {
+function renderLawPreview() {
   const law = editing;
   const found = problems(law);
   const notes = [];
   if (law.mode === 'new' && !Object.values(law.names).some(Boolean)) notes.push(t('note.no_name'));
-  if (law.mode === 'new' && !law.parent) notes.push(t('law.note_no_parent'));
   const lang = language();
+  if (groupOf(law.group) && groupOf(law.group).mine) notes.push(t('law.new_group_neutral'));
+  else if (law.mode === 'new' && !law.parent) notes.push(t('law.note_no_parent'));
   const original = law.mode === 'override' ? store.index.laws.get(law.key) : null;
   const desc = law.descs[lang] || (original && original.desc) || '';
-  const group = store.index.law_groups.get(law.group);
+  const group = groupOf(law.group);
   const limit = lawLimit(law);
   const limits = [
     ...groupLimits(group).map((item) => h('div', { title: item.title }, t('law.limit_group_line', { text: item.text }))),
@@ -551,18 +653,12 @@ function basicSection() {
     placeholder: (original && original.name) || '', oninput: text('names') });
   const desc = h('textarea', { class: 'input', rows: 3, value: law.descs[lang] || '',
     placeholder: (original && original.desc) || '', oninput: text('descs') });
-  const group = h('select', {
-    class: 'input', disabled: law.mode === 'override',
-    onchange: () => {
-      law.group = group.value;
-      // the parent and the default belong to the old group
-      law.parent = '';
-      changed();
-      refresh('stances');
-    },
-  }, store.data.law_categories.map((category) => h('optgroup', { label: category.name },
-    store.data.law_groups.filter((g) => g.category === category.key).map((g) => h('option', { value: g.key }, g.name || g.key)))));
-  group.value = law.group;
+  // the group is chosen on the board, where the law was made, and stays
+  const info = groupOf(law.group);
+  const category = info && store.index.law_categories.get(info.category);
+  const group = h('div', { class: 'readonly-value' },
+    [category && category.name, info ? info.name || info.key : law.group].filter(Boolean).join(' · '),
+    h('span', { class: 'company-key' }, law.group));
   const progress = h('input', {
     class: 'input level' + (NUMBER_PATTERN.test(law.progressiveness) ? '' : ' invalid'), type: 'text',
     value: law.progressiveness,
@@ -579,7 +675,7 @@ function basicSection() {
     field(t('company.name', { language: languageName(lang) }), name,
       law.mode === 'override' ? t('company.name_hint_override') : t('company.name_hint')),
     field(t('law.desc', { language: languageName(lang) }), desc),
-    field(t('law.group'), group, law.mode === 'override' ? t('law.group_locked') : t('law.group_hint')),
+    field(t('law.group'), group, t('law.group_locked')),
     field(t('law.progressiveness'), progress, t('law.progressiveness_hint')));
 }
 
@@ -609,8 +705,12 @@ function stancesSection() {
           `${nameOf('ideologies', part.id)}：${t('law.stance.' + part.stance)}`).join(' · '))),
       h('b', { class: label.tone }, label.text));
   });
+  const inNewGroup = Boolean(groupOf(law.group) && groupOf(law.group).mine);
   return section(t('law.stances'), t('law.stances_hint'),
-    field(t('law.parent'), parent, law.mode === 'override' && !law.parent ? t('law.parent_override_hint') : t('law.parent_hint')),
+    inNewGroup
+      ? h('div', { class: 'notice' }, t('law.new_group_neutral'))
+      : field(t('law.parent'), parent,
+        law.mode === 'override' && !law.parent ? t('law.parent_override_hint') : t('law.parent_hint')),
     h('div', { class: 'stance-table' }, rows),
     h('p', { class: 'muted small' }, t('law.stances_note')));
 }
@@ -790,10 +890,178 @@ function versionBar() {
 }
 
 function renderMiddle() {
-  for (const name of Object.keys(builders)) sections[name] = builders[name]();
+  const active = editingKind === 'group' ? groupBuilders : builders;
+  for (const name of Object.keys(sections)) delete sections[name];
+  for (const name of Object.keys(active)) sections[name] = active[name]();
   fill(els.middle,
     h('div', { class: 'editor-bar' },
-      versionBar(),
+      editingKind === 'law' && versionBar(),
       h('button', { class: 'btn icon-btn', title: t('law.back'), onclick: () => run(close) }, '✕')),
     Object.values(sections));
 }
+
+// ------------------------------------------------------------ group editor
+
+// Same checks as the backend.
+function groupProblems(group) {
+  const found = [];
+  const others = projectGroups().filter((other) => other.key !== originalKey);
+  if (!group.key) found.push('key_missing');
+  else if (!KEY_PATTERN.test(group.key)) found.push('key_invalid');
+  else if (store.index.law_groups.has(group.key) || others.some((other) => other.key === group.key)) found.push('key_exists');
+  if (!store.index.law_categories.has(group.category)
+    && !store.data.law_groups.some((other) => other.category === group.category)) found.push('category');
+  if (!NUMBER_PATTERN.test(group.ideological_opinion_impact)) found.push('opinion_impact');
+  if (group.base_enactment_days && !/^\d+$/.test(group.base_enactment_days)) found.push('enactment_days');
+  if (group.enactment_approval_mult && !NUMBER_PATTERN.test(group.enactment_approval_mult)) found.push('approval_mult');
+  for (const name of ['enable', 'change_allowed_trigger']) if (!bracesBalanced(group.blocks[name])) found.push('braces:' + name);
+  if (!bracesBalanced(group.extra)) found.push('braces:extra');
+  return found;
+}
+
+// The mod's laws in the group being edited (under its saved key), in the order they were made.
+const groupLaws = () => (originalKey ? projectLaws().filter((law) => law.group === originalKey) : []);
+
+function renderGroupPreview() {
+  const group = editing;
+  const found = groupProblems(group);
+  const notes = [];
+  if (!Object.values(group.names).some(Boolean)) notes.push(t('note.no_name'));
+  const laws = groupLaws();
+  if (!laws.length) notes.push(t('lgroup.note_no_laws'));
+  const lang = language();
+  const category = store.index.law_categories.get(group.category);
+  const limits = groupLimits({ ...group, enable: group.blocks.enable,
+    hierarchy_name: group.hierarchy ? nameOf('social_hierarchies', group.hierarchy) : '' });
+  const filled = store.state.languages.filter((l) => group.names[l.key]);
+  fill(els.preview,
+    h('h3', { class: 'preview-name' }, lawGroupName(group)),
+    group.descs[lang] && h('p', { class: 'muted small' }, group.descs[lang]),
+    h('div', { class: 'preview-meta' },
+      h('span', { class: 'company-key' }, group.key || '—'),
+      h('span', { class: 'badge' }, t('company.mode.new')),
+      dirty && h('span', { class: 'badge warn' }, t('company.unsaved'))),
+    h('div', { class: 'muted' }, category ? category.name : group.category),
+    h('div', { class: 'preview-group' },
+      h('h4', {}, t('law.limits')),
+      limits.length ? limits.map((item) => h('div', { title: item.title }, item.text))
+        : h('span', { class: 'muted' }, t('law.no_limits'))),
+    h('div', { class: 'preview-group' },
+      h('h4', {}, t('lgroup.laws')),
+      laws.length
+        ? h('ol', { class: 'law-progression' }, laws.map((law, index) => h('li', {}, lawName(law),
+          index === 0 && [' ', h('span', { class: 'badge', title: t('law.default_hint') }, t('law.default'))])))
+        : h('span', { class: 'muted' }, t('lgroup.no_laws'))),
+    h('div', { class: 'preview-group' },
+      h('h4', {}, t('company.translations', { count: filled.length, total: store.state.languages.length })),
+      h('div', { class: 'chips' }, store.state.languages.map((l) =>
+        h('span', { class: 'chip' + (group.names[l.key] ? ' filled' : ' missing'), title: group.names[l.key] || '' }, l.name)))),
+    found.length > 0 && h('ul', { class: 'problems' }, found.map((code) => h('li', {}, problemText(code)))),
+    notes.length > 0 && h('ul', { class: 'notes' }, notes.map((note) => h('li', {}, note))));
+}
+
+function groupBasicSection() {
+  const group = editing;
+  const lang = language();
+  const key = h('input', {
+    class: 'input mono', type: 'text', spellcheck: false, value: group.key, placeholder: 'lawgroup_my_group',
+    oninput: () => { group.key = key.value.trim(); changed(); },
+  });
+  const text = (field) => (event) => {
+    const value = event.target.value.trim();
+    if (value) group[field][lang] = value;
+    else delete group[field][lang];
+    changed();
+  };
+  const name = h('input', { class: 'input', type: 'text', value: group.names[lang] || '', oninput: text('names') });
+  const desc = h('textarea', { class: 'input', rows: 2, value: group.descs[lang] || '', oninput: text('descs') });
+  const category = store.index.law_categories.get(group.category);
+  return section(t('company.basic'), null,
+    field(t('company.key'), key, t('lgroup.key_hint')),
+    field(t('company.name', { language: languageName(lang) }), name, t('company.name_hint')),
+    field(t('law.desc', { language: languageName(lang) }), desc),
+    field(t('lgroup.category'), h('div', { class: 'readonly-value' }, category ? category.name : group.category),
+      t('lgroup.category_locked')));
+}
+
+function groupSettingsSection() {
+  const group = editing;
+  const number = (name, pattern, placeholder) => {
+    const input = h('input', {
+      class: 'input level', type: 'text', value: group[name], placeholder,
+      oninput: () => {
+        group[name] = input.value.trim();
+        input.classList.toggle('invalid', Boolean(group[name]) && !pattern.test(group[name]));
+        changed();
+      },
+    });
+    input.classList.toggle('invalid', Boolean(group[name]) && !pattern.test(group[name]));
+    return input;
+  };
+  const hierarchy = h('select', {
+    class: 'input', onchange: () => { group.hierarchy = hierarchy.value; changed(); },
+  },
+    h('option', { value: '' }, t('lgroup.no_hierarchy')),
+    store.data.social_hierarchies.map((item) => h('option', { value: item.key }, item.name || item.key)));
+  hierarchy.value = group.hierarchy;
+  return section(t('lgroup.settings'), null,
+    field(t('lgroup.opinion_impact'), number('ideological_opinion_impact', NUMBER_PATTERN, '1'), t('lgroup.opinion_impact_hint')),
+    field(t('lgroup.enactment_days'), number('base_enactment_days', /^\d+$/, ''), t('lgroup.enactment_days_hint')),
+    field(t('lgroup.approval_mult'), number('enactment_approval_mult', NUMBER_PATTERN, '1'), t('lgroup.approval_mult_hint')),
+    h('div', {},
+      h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: group.affected_by_regime_change,
+          onchange: (event) => { group.affected_by_regime_change = event.target.checked; changed(); } }),
+        t('lgroup.regime_change')),
+      h('p', { class: 'muted small' }, t('lgroup.regime_change_hint'))),
+    field(t('lgroup.hierarchy'), hierarchy, t('lgroup.hierarchy_hint')));
+}
+
+function groupConditionsSection() {
+  const group = editing;
+  const block = (name) => h('div', { class: 'cond-block' },
+    h('div', { class: 'cond-head' },
+      h('span', { class: 'field-label' }, t('lgroup.block.' + name)),
+      h('span', { class: 'mono muted small' }, name)),
+    h('p', { class: 'muted small' }, t('lgroup.block_hint.' + name)),
+    conditionEditor({
+      id: 'group_' + name, kinds: COUNTRY_KINDS,
+      get: () => group.blocks[name],
+      set: (text) => { group.blocks[name] = text; changed(); },
+    }));
+  return section(t('lgroup.conditions'), null, block('enable'), block('change_allowed_trigger'));
+}
+
+// The mod's laws in the group, to open them or add one (once the group is saved).
+function groupLawsSection() {
+  const laws = groupLaws();
+  return section(t('lgroup.laws'), t('lgroup.laws_hint'),
+    laws.length
+      ? h('div', { class: 'law-list' }, laws.map((law, index) => h('div', { class: 'law-row' },
+        h('button', { class: 'law-row-main', onclick: () => run(() => edit(law, law.key)) },
+          thumb(law.icon, 64, 'law-icon'),
+          h('span', { class: 'company-title' },
+            h('span', { class: 'company-name' }, lawName(law)), h('span', { class: 'company-key' }, law.key)),
+          index === 0 && h('span', { class: 'badge', title: t('law.default_hint') }, t('law.default'))))))
+      : h('p', { class: 'muted' }, t('lgroup.no_laws')),
+    originalKey
+      ? h('button', { class: 'btn law-add', onclick: () => run(() => newLaw(originalKey)) }, '＋ ' + t('law.new'))
+      : h('p', { class: 'muted small' }, t('lgroup.laws_after_save')));
+}
+
+function groupAdvancedSection() {
+  const group = editing;
+  return section(t('company.advanced'), null,
+    h('div', { class: 'script-field' },
+      h('span', { class: 'field-label' }, t('company.extra')),
+      h('p', { class: 'muted small' }, t('lgroup.extra_hint')),
+      scriptArea(() => group.extra, (value) => { group.extra = value; })));
+}
+
+const groupBuilders = {
+  basic: groupBasicSection,
+  settings: groupSettingsSection,
+  conditions: groupConditionsSection,
+  laws: groupLawsSection,
+  advanced: groupAdvancedSection,
+};

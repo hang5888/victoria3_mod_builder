@@ -2,21 +2,25 @@
 // and open folder buttons.
 //
 // The editor page passes itself in as
-//   { kind, state() -> {key, dirty}, open(item), remove(item) }
-// where `key` is the key of the opened item in the project (null for a new one).
+//   { kind, handles(kind)?, state() -> {key, dirty, kind?}, open(item, kind), remove(item, kind) }
+// where `key` is the key of the opened item in the project (null for a new one). A page that edits
+// several kinds (the law page: laws and law groups) says which with handles(), and which one is
+// open with state().kind.
 // The list shows what is saved in the mod: a new item, or a change to one, appears after saving.
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { store, companyName, factoryName, monumentName, lawName, setProject, keptImages } from './store.js';
+import { store, companyName, factoryName, monumentName, lawName, lawGroupName, setProject, keptImages } from './store.js';
 import { h, fill, toast } from './ui.js';
 import { thumb } from './icons.js';
 import { run } from './widgets.js';
 
-// What a mod can contain, in the order shown. The kind is also the name of its editor page.
+// What a mod can contain, in the order shown. The kind is also the name of its editor page, unless
+// `page` says otherwise.
 const KINDS = {
   company: { items: (project) => project.companies, name: companyName, icon: (item) => item.icon },
   factory: { items: (project) => project.factories || [], name: factoryName, icon: (item) => item.icon },
   monument: { items: (project) => project.monuments || [], name: monumentName, icon: (item) => item.icon },
+  law_group: { items: (project) => project.law_groups || [], name: lawGroupName, icon: () => '', page: 'law' },
   law: { items: (project) => project.laws || [], name: lawName, icon: (item) => item.icon },
 };
 
@@ -97,19 +101,19 @@ async function save() {
 }
 
 function group(kind, def, state) {
-  const active = editor.kind === kind;
+  const active = editor.handles ? editor.handles(kind) : editor.kind === kind;
   const items = def.items(store.project);
   const rows = items.map((item) => {
-    const current = active && item.key === state.key;
+    const current = active && item.key === state.key && (!state.kind || state.kind === kind);
     return row(def, item, {
       current,
       unsaved: current && state.dirty,
       // items of other kinds are edited on their own page
-      onOpen: current ? null : active ? () => editor.open(item) : () => {
+      onOpen: current ? null : active ? () => editor.open(item, kind) : () => {
         pending = { kind, key: item.key };
-        location.hash = '#/' + kind;
+        location.hash = '#/' + (def.page || kind);
       },
-      onRemove: active ? () => editor.remove(item) : null,
+      onRemove: active ? () => editor.remove(item, kind) : null,
       removeTitle: t('sidebar.delete'),
     });
   });

@@ -32,7 +32,7 @@ export function languageName(key) {
 const INDEXED = ['companies', 'buildings', 'modifiers', 'states', 'regions', 'countries', 'prestige_goods', 'categories',
   'technologies', 'cultures', 'factories', 'building_groups', 'pmgs', 'pms', 'goods', 'pop_types', 'laws',
   'principles', 'identities', 'geographic_regions', 'religions', 'straits', 'culture_traits', 'lenses',
-  'law_groups', 'law_categories', 'ideologies', 'interest_groups', 'institutions'];
+  'law_groups', 'law_categories', 'ideologies', 'interest_groups', 'institutions', 'social_hierarchies'];
 
 // Game data for the current language, or null when nothing is loaded yet.
 export async function loadData() {
@@ -115,6 +115,11 @@ export const monumentName = (monument) => buildingName(monument, t('monument.unn
 export function lawName(law) {
   const original = law.mode === 'override' && store.index ? store.index.laws.get(law.key) : null;
   return law.names[language()] || (original && original.name) || law.names.english || law.key || t('law.unnamed');
+}
+
+// Name of a new law group of the project.
+export function lawGroupName(group) {
+  return group.names[language()] || group.names.english || group.key || t('lgroup.unnamed');
 }
 
 // Game path of an object's icon, or '' when it has none.
