@@ -5,14 +5,13 @@ their ideologies, which this tool does not change: a new law gets stances only t
 `parent`, whose stances it inherits (the game also treats it as a variant of the parent).
 
 Besides the law itself, the model keeps where it starts:
-  start: {countries, all, default}
-    countries: tags of the countries that have the law when the game starts
-    all:       every country has it when the game starts
+  start: {all, default}
+    all:       every country has it when the game starts; written in the global history,
+               which runs after all other history
     default:   (new laws only) the law of its group for countries whose history sets none;
                the game uses the group's first law it reads, so it is written in a file that
                is read before the game's own laws
-Both kinds of starting laws are written in the global history, which runs after all other
-history.
+The laws single countries start with belong to their own start (not made yet).
 
 As with companies, fields without a real editor are kept as raw script text.
 """
@@ -30,11 +29,10 @@ MODIFIER_FIELDS = ("modifier", "institution_modifier", "acceptance_modifier",
 RAW_BLOCKS = ("is_visible", "can_enact", "on_enact", "on_activate", "on_deactivate",
               "can_impose", "ai_impose_chance", "ai_will_do", "ai_enact_weight_modifier")
 NUMBER_PATTERN = re.compile(r"^-?\d+(\.\d+)?$")
-TAG_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,12}$")
 
 
 def empty_start():
-    return {"countries": [], "all": False, "default": False}
+    return {"all": False, "default": False}
 
 
 def empty_law():
@@ -52,7 +50,8 @@ def fill_law(stored):
     law = {**empty_law(), **stored}
     law["modifiers"] = {**empty_law()["modifiers"], **(stored.get("modifiers") or {})}
     law["blocks"] = {**empty_law()["blocks"], **(stored.get("blocks") or {})}
-    law["start"] = {**empty_start(), **(stored.get("start") or {})}
+    start = stored.get("start") or {}
+    law["start"] = {name: bool(start.get(name, value)) for name, value in empty_start().items()}
     return law
 
 
@@ -151,11 +150,7 @@ def normalize_law(raw):
     start = raw.get("start") or {}
     if not isinstance(start, dict):
         raise ValueError("start")
-    countries = start.get("countries") or []
-    if not isinstance(countries, list) or not all(isinstance(c, str) and TAG_PATTERN.match(c) for c in countries):
-        raise ValueError("start")
-    law["start"] = {"countries": list(dict.fromkeys(countries)), "all": bool(start.get("all")),
-                    "default": bool(start.get("default"))}
+    law["start"] = {"all": bool(start.get("all")), "default": bool(start.get("default"))}
     law["extra"] = str(raw.get("extra") or "").replace("\r\n", "\n")
     return law
 
@@ -278,25 +273,13 @@ def is_default(law):
 
 
 def start_script(laws):
-    """The global history that gives countries their starting laws: every country first, then the
-    countries chosen one by one, so the chosen ones win."""
+    """The global history that gives every country the laws it should start with."""
     every = [law["key"] for law in laws if law["start"]["all"]]
-    by_country = {}
-    for law in laws:
-        for tag in law["start"]["countries"]:
-            by_country.setdefault(tag, []).append(law["key"])
-    if not every and not by_country:
+    if not every:
         return []
-    out = ["GLOBAL = {"]
-    if every:
-        out.append("\tevery_country = {")
-        out.extend(f"\t\tactivate_law = law_type:{key}" for key in every)
-        out.append("\t}")
-    for tag, keys in by_country.items():
-        out.append(f"\tc:{tag} ?= {{")
-        out.extend(f"\t\tactivate_law = law_type:{key}" for key in keys)
-        out.append("\t}")
-    out.append("}")
+    out = ["GLOBAL = {", "\tevery_country = {"]
+    out.extend(f"\t\tactivate_law = law_type:{key}" for key in every)
+    out.extend(["\t}", "}"])
     return ["\n".join(out)]
 
 

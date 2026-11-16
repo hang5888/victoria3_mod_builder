@@ -132,6 +132,7 @@ select.input { padding-right: 4px; }
 .badge.warn { color: var(--warn); border-color: var(--warn); }
 .badge.source { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
 .badge.faded { opacity: 0.55; }
+.badge.limit { color: var(--warn); border-color: rgba(227, 183, 94, 0.55); white-space: normal; text-align: left; }
 .badges { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex: none; }
 
 .notice {
@@ -433,6 +434,8 @@ select.input { padding-right: 4px; }
 .law-group-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .law-group-name { font-weight: 600; }
 .law-group-text .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.law-group-text .badges { margin-top: 3px; }
+.law-row .company-title .badge.limit { display: inline-block; margin-top: 2px; }
 .law-list { display: flex; flex-direction: column; gap: 2px; padding: 6px; }
 .law-row { display: flex; align-items: center; gap: 4px; border: 1px solid transparent; border-radius: var(--radius); }
 .law-row:hover { background: var(--panel-2); }

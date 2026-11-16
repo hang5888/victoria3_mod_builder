@@ -9,13 +9,11 @@
   "common.remove": "Remove",
   "picker.done": "Done ({count} selected)",
   "picker.count": "{count} shown",
-
   "nav.home": "Home",
   "nav.company": "Companies",
   "header.project": "Mod: {name}",
   "header.version": "Game {version}",
   "header.language": "Language",
-
   "home.intro": "Build Victoria 3 mods from the data of your own game and mods. The game files and other mods are never changed: everything you make here is written to a separate new mod.",
   "home.folders": "Folders",
   "home.folder.game_dir": "Game folder",
@@ -85,14 +83,12 @@
   "home.type.count": "{count} in your mod",
   "home.type.more": "More mod types",
   "home.type.planned": "Planned for later versions.",
-
   "map.loading": "Preparing the map…",
   "map.zoom_in": "Zoom in",
   "map.zoom_out": "Zoom out",
   "map.reset": "Show the whole map",
   "map.failed": "The map could not be loaded.",
   "map.headquarters": "{count} headquarters: {names}",
-
   "company.need_data": "The game data is not loaded yet.",
   "company.need_project": "No mod chosen yet.",
   "company.go_home": "Go to the home page",
@@ -114,7 +110,6 @@
   "sidebar.delete": "Delete from the mod",
   "sidebar.save": "Save to mod",
   "sidebar.open_folder": "Open mod folder",
-
   "editor.save": "Save",
   "editor.close": "Close and go back to the start screen",
   "editor.nothing_open": "Nothing is open.",
@@ -183,7 +178,6 @@
   "company.no_conditions": "None (always available)",
   "company.ai": "AI",
   "company.advanced": "Advanced",
-
   "block.potential": "If these are not met, the company is hidden completely. Empty: always shown.",
   "block.attainable": "If these are not met, the company is shown only as a potential company.",
   "block.possible": "When these are met too, the company can be founded. Empty: always.",
@@ -199,10 +193,8 @@
   "block.title.ai_will_do": "When the AI founds it",
   "block.title.ai_construction_targets": "AI construction targets",
   "block.title.ai_weight": "AI weight",
-
   "note.no_ai": "The AI never founds this company.",
   "note.no_name": "No name entered yet: the game will show the key.",
-
   "problem.key_missing": "The key is missing.",
   "problem.key_invalid": "The key may only contain letters, digits, _ . and -",
   "problem.key_exists": "Another company already uses this key.",
@@ -211,7 +203,6 @@
   "problem.buildings_missing": "Choose at least one building type.",
   "problem.modifier_value": "A bonus value is not a number (or yes / no).",
   "problem.braces": "Unbalanced { } in “{name}”.",
-
   "error.offline": "The builder is not running. Start app.py again.",
   "error.server_error": "Something went wrong in the builder. See the console window for details.",
   "error.not_loaded": "The game data is not loaded yet.",
@@ -225,7 +216,6 @@
   "error.unsupported_texture": "This image format cannot be shown.",
   "error.forbidden": "Access refused.",
   "error.open_folder_failed": "Could not open the mod folder.",
-
   "ai.mode.same": "Same as “Can be founded when”",
   "ai.mode.custom": "Own conditions",
   "ai.mode.never": "The AI never founds it",
@@ -235,7 +225,6 @@
   "ai.weight_short": "weight {value}",
   "ai.targets_short": "{count} construction targets",
   "ai.weight_script": "This weight is written as a formula; edit it as script.",
-
   "cond.add": "+ Add condition…",
   "cond.add_one": "+ Add",
   "cond.kind.tech": "Technology researched",
@@ -260,7 +249,6 @@
   "cond.era": "Era {n}",
   "cond.clear": "Clear",
   "cond.empty": "None yet.",
-
   "template.title": "Quick template: company tied to a state region",
   "template.hint": "Fills in the conditions and AI the way the base game's flavored companies do. You can still change every row afterwards.",
   "template.state": "State region",
@@ -272,7 +260,6 @@
   "template.confirm": "This replaces the current conditions, AI conditions and AI construction targets. Continue?",
   "template.need_state": "Choose a state region first.",
   "template.applied": "Template applied. Check the rows below.",
-
   "nav.factory": "Factories",
   "home.type.factory": "Factories",
   "home.type.factory_hint": "Add production buildings with their own production methods, or change existing buildings.",
@@ -639,11 +626,9 @@
   "law.special": "Taxes and acceptance",
   "law.special_hint": "Taxation laws give modifiers for each tax level; citizenship laws give modifiers for acceptance.",
   "law.start": "Start of the game",
-  "law.start_hint": "Which countries have this law when the game starts. It is written in the history that runs after all other history, so it replaces the law of the same group those countries had.",
-  "law.start_countries": "Countries that start with it",
-  "law.start_countries_hint": "These countries start with this law.",
+  "law.start_hint": "When the game starts. The laws single countries start with will be set in country starts (a later mod type).",
   "law.start_all": "Every country starts with it",
-  "law.start_all_hint": "Every country starts with this law, except the countries chosen for another law of this group.",
+  "law.start_all_hint": "Every country starts with this law. It is written in the history that runs after all other history, so it replaces the law of this group every country had.",
   "law.start_default": "Default law of the group",
   "law.start_default_hint": "Countries whose history sets no law of this group use this one. The game uses the first law of a group it reads, so this law is written in a file read before the base game's laws (to be confirmed in the game).",
   "law.start_default_override": "Only new laws can be the default: the order in which existing laws are read cannot change.",
@@ -681,7 +666,6 @@
   "law.scripts_hint": "Effects written as script. Empty ones are left out.",
   "law.extra_hint": "Fields of the law this tool has no form for, as script.",
   "law.note_no_parent": "No parent law: every interest group is neutral about this law, so no one pushes for or against it.",
-  "law.note_default_conditions": "The default law has conditions: countries that cannot see or enact it still start with it.",
   "lproblem.key_missing": "The law needs a key.",
   "lproblem.key_invalid": "The key may only contain letters, digits, _, . and -.",
   "lproblem.key_exists": "A law with this key already exists.",
@@ -693,5 +677,17 @@
   "lproblem.modifier_value": "Modifier values must be numbers (or yes/no).",
   "lproblem.default_override": "An existing law cannot be the default.",
   "lproblem.default_twice": "Another law of your mod is already the default of this group.",
-  "lproblem.all_twice": "Another law of your mod already starts in every country for this group."
+  "lproblem.all_twice": "Another law of your mod already starts in every country for this group.",
+  "law.limit_countries": "Only {names}",
+  "law.limit_cultures": "Only {names} culture",
+  "law.limit_more": " (more conditions)",
+  "law.limit_other": "Has visibility conditions",
+  "law.limit_hierarchy": "{name} only",
+  "law.limit_hierarchy_hint": "This law group is tied to a social hierarchy (common/social_hierarchies), which only some pops belong to.",
+  "law.limit_enable": "Has enabling conditions",
+  "law.limits": "Who can use it",
+  "law.no_limits": "Every country",
+  "law.limit_group_line": "Law group: {text}",
+  "law.limit_law_line": "This law: {text}",
+  "law.note_start_conditions": "This law is limited, but every country starts with it or it is the default: countries that cannot see or enact it start with it anyway."
 }

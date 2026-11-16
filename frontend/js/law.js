@@ -11,7 +11,7 @@ import { thumb } from './icons.js';
 import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, imageField, scriptArea as scriptBox,
   formatModifier } from './widgets.js';
 import { bracesBalanced } from './script.js';
-import { COUNTRY_KINDS, conditionEditor, clearConditionCache, countConditions } from './conditions.js';
+import { COUNTRY_KINDS, conditionEditor, clearConditionCache, readConditions } from './conditions.js';
 
 const TAX_LEVELS = ['very_low', 'low', 'medium', 'high', 'very_high'];
 const MODIFIER_FIELDS = ['modifier', 'institution_modifier', 'acceptance_modifier',
@@ -61,7 +61,7 @@ function blankLaw(group) {
     ...Object.fromEntries(LIST_FIELDS.map((name) => [name, []])),
     modifiers: Object.fromEntries(MODIFIER_FIELDS.map((name) => [name, []])),
     blocks: { ...Object.fromEntries(RAW_BLOCKS.map((name) => [name, ''])), ai_enact_weight_modifier: AI_PETITIONS },
-    start: { countries: [], all: false, default: false },
+    start: { all: false, default: false },
     extra: '',
   };
 }
@@ -181,6 +181,36 @@ function stances(law) {
     return { ig, parts, score: parts.reduce((total, part) => total + (STANCE_VALUES[part.stance] || 0), 0) };
   });
 }
+
+// Who can see a law, from its visibility conditions: "only Japan", "only Japanese culture", or just
+// that it has conditions. null when every country sees it. `title`: the whole condition script.
+function lawLimit(law) {
+  const text = law.blocks.is_visible.trim();
+  if (!text) return null;
+  const model = readConditions(text, ['country', 'culture']);
+  const rows = model ? model.rows : [];
+  const countries = rows.filter((row) => row.kind === 'country').flatMap((row) => row.countries);
+  const cultures = rows.filter((row) => row.kind === 'culture').flatMap((row) => row.cultures);
+  const parts = [
+    countries.length && t('law.limit_countries', { names: countries.map((tag) => nameOf('countries', tag)).join(' / ') }),
+    cultures.length && t('law.limit_cultures', { names: cultures.map((key) => nameOf('cultures', key)).join(' / ') }),
+  ].filter(Boolean);
+  if (!parts.length) return { text: t('law.limit_other'), title: text };
+  const more = rows.some((row) => row.kind === 'raw');
+  return { text: parts.join(' · ') + (more ? t('law.limit_more') : ''), title: text };
+}
+
+// Who a law group is for: a social hierarchy (as the caste system), and its enabling conditions.
+function groupLimits(group) {
+  if (!group) return [];
+  return [
+    group.hierarchy && { text: t('law.limit_hierarchy', { name: group.hierarchy_name || group.hierarchy }),
+      title: t('law.limit_hierarchy_hint') },
+    group.enable.trim() && { text: t('law.limit_enable'), title: group.enable },
+  ].filter(Boolean);
+}
+
+const limitBadge = (limit) => h('span', { class: 'badge limit', title: limit.title }, limit.text);
 
 function stanceLabel(score) {
   if (score > 0) return { text: t('law.stance_approve', { score: `+${score}` }), tone: 'good' };
@@ -395,7 +425,8 @@ function groupCard(group, rows, shown, filtering) {
       thumb(first ? rowLaw(first).icon : '', 128, 'law-group-icon'),
       h('span', { class: 'law-group-text' },
         h('span', { class: 'law-group-name' }, group.name || group.key),
-        first && h('span', { class: 'muted small' }, t('law.default_short', { name: rowName(first) }))),
+        first && h('span', { class: 'muted small' }, t('law.default_short', { name: rowName(first) })),
+        groupLimits(group).length > 0 && h('span', { class: 'badges' }, groupLimits(group).map(limitBadge))),
       changes > 0 && h('span', { class: 'badge accent', title: t('law.changed_hint') }, t('law.changed', { count: changes })),
       h('span', { class: 'badge' }, String(rows.length)),
       !filtering && h('span', { class: 'side-caret' }, open ? '▾' : '▸')),
@@ -406,12 +437,14 @@ function groupCard(group, rows, shown, filtering) {
 
 function lawRow(row, fallback, highlight) {
   const law = rowLaw(row);
+  const limit = lawLimit(law);
   return h('div', { class: 'law-row' + (highlight ? ' match' : '') },
     h('button', { class: 'law-row-main', onclick: () => run(() => openRow(row)) },
       thumb(law.icon, 64, 'law-icon'),
       h('span', { class: 'company-title' },
         h('span', { class: 'company-name' }, rowName(row)),
-        h('span', { class: 'company-key' }, row.key)),
+        h('span', { class: 'company-key' }, row.key),
+        limit && h('span', {}, limitBadge(limit))),
       h('span', { class: 'side-badges' },
         row.key === fallback && h('span', { class: 'badge', title: t('law.default_hint') }, t('law.default')),
         row.mine && h('span', { class: 'badge accent' }, row.mine.mode === 'override' ? t('law.modified') : t('law.added')),
@@ -444,13 +477,17 @@ function renderPreview() {
   const notes = [];
   if (law.mode === 'new' && !Object.values(law.names).some(Boolean)) notes.push(t('note.no_name'));
   if (law.mode === 'new' && !law.parent) notes.push(t('law.note_no_parent'));
-  if (law.start.default && (law.blocks.is_visible.trim() || law.blocks.can_enact.trim())) {
-    notes.push(t('law.note_default_conditions'));
-  }
   const lang = language();
   const original = law.mode === 'override' ? store.index.laws.get(law.key) : null;
   const desc = law.descs[lang] || (original && original.desc) || '';
   const group = store.index.law_groups.get(law.group);
+  const limit = lawLimit(law);
+  const limits = [
+    ...groupLimits(group).map((item) => h('div', { title: item.title }, t('law.limit_group_line', { text: item.text }))),
+    limit && h('div', { title: limit.title }, t('law.limit_law_line', { text: limit.text })),
+  ].filter(Boolean);
+  const limited = limits.length > 0 || law.blocks.can_enact.trim();
+  if ((law.start.all || law.start.default) && limited) notes.push(t('law.note_start_conditions'));
   const category = group && store.index.law_categories.get(group.category);
   const counts = { good: 0, bad: 0, neutral: 0 };
   for (const { score } of stances(law)) counts[score > 0 ? 'good' : score < 0 ? 'bad' : 'neutral'] += 1;
@@ -462,7 +499,6 @@ function renderPreview() {
   const startChips = [
     law.start.all && h('span', { class: 'chip' }, t('law.start_all')),
     law.start.default && h('span', { class: 'chip' }, t('law.start_default')),
-    ...law.start.countries.map((tag) => h('span', { class: 'chip', title: tag }, nameOf('countries', tag))),
   ].filter(Boolean);
   const effects = MODIFIER_FIELDS.filter((name) => name !== 'institution_modifier' && law.modifiers[name].length);
   fill(els.preview,
@@ -474,6 +510,9 @@ function renderPreview() {
       h('span', { class: 'badge' + (law.mode === 'override' ? ' accent' : '') }, t('company.mode.' + law.mode)),
       dirty && h('span', { class: 'badge warn' }, t('company.unsaved'))),
     h('div', { class: 'muted' }, [category && category.name, group ? group.name : law.group].filter(Boolean).join(' · ')),
+    h('div', { class: 'preview-group' },
+      h('h4', {}, t('law.limits')),
+      limits.length ? limits : h('span', { class: 'muted' }, t('law.no_limits'))),
     h('div', { class: 'preview-group' },
       h('h4', {}, t('law.stances')),
       h('div', {}, law.parent ? t('law.parent_short', { name: lawNameOf(law.parent) }) : t('law.no_parent')),
@@ -604,9 +643,6 @@ function startSection() {
       label),
     h('p', { class: 'muted small' }, hint));
   return section(t('law.start'), t('law.start_hint'),
-    keyChips({ keys: law.start.countries, kind: 'countries', label: t('law.start_countries'),
-      hint: t('law.start_countries_hint'),
-      onChange: (keys) => { law.start.countries = keys; changed(); refresh('start'); } }),
     check('all', t('law.start_all'), t('law.start_all_hint')),
     check('default', t('law.start_default'),
       law.mode === 'override' ? t('law.start_default_override') : t('law.start_default_hint'), law.mode === 'override'));

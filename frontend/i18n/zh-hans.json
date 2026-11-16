@@ -9,13 +9,11 @@
   "common.remove": "移除",
   "picker.done": "完成（已选 {count} 项）",
   "picker.count": "显示 {count} 项",
-
   "nav.home": "首页",
   "nav.company": "公司",
   "header.project": "模组：{name}",
   "header.version": "游戏 {version}",
   "header.language": "语言",
-
   "home.intro": "利用你自己的游戏和模组中的数据来制作《维多利亚3》模组。游戏本体和其他模组的文件不会被修改：你在这里做的一切都会写入一个单独的新模组。",
   "home.folders": "文件夹",
   "home.folder.game_dir": "游戏文件夹",
@@ -85,14 +83,12 @@
   "home.type.count": "模组中已有 {count} 项",
   "home.type.more": "更多模组类型",
   "home.type.planned": "计划在之后的版本中加入。",
-
   "map.loading": "正在准备地图…",
   "map.zoom_in": "放大",
   "map.zoom_out": "缩小",
   "map.reset": "显示整张地图",
   "map.failed": "无法加载地图。",
   "map.headquarters": "{count} 个总部：{names}",
-
   "company.need_data": "尚未加载游戏数据。",
   "company.need_project": "尚未选择模组。",
   "company.go_home": "前往首页",
@@ -114,7 +110,6 @@
   "sidebar.delete": "从模组中删除",
   "sidebar.save": "保存到模组",
   "sidebar.open_folder": "打开模组文件夹",
-
   "editor.save": "保存",
   "editor.close": "关闭并回到初始画面",
   "editor.nothing_open": "目前没有打开任何项目。",
@@ -183,7 +178,6 @@
   "company.no_conditions": "无（总是可以建立）",
   "company.ai": "AI",
   "company.advanced": "进阶",
-
   "block.potential": "不满足时，公司完全隐藏。留空表示总是显示。",
   "block.attainable": "不满足时，公司只显示为“潜在”公司。",
   "block.possible": "这些也满足时才可以建立公司。留空表示随时可以建立。",
@@ -199,10 +193,8 @@
   "block.title.ai_will_do": "AI 建立条件",
   "block.title.ai_construction_targets": "AI 建造目标",
   "block.title.ai_weight": "AI 权重",
-
   "note.no_ai": "AI 不会建立这家公司。",
   "note.no_name": "尚未输入名称：游戏中会显示键名。",
-
   "problem.key_missing": "缺少键名。",
   "problem.key_invalid": "键名只能包含字母、数字、_ . 和 -",
   "problem.key_exists": "已有其他公司使用这个键名。",
@@ -211,7 +203,6 @@
   "problem.buildings_missing": "至少选择一种建筑类型。",
   "problem.modifier_value": "有加成的数值不是数字（或 yes / no）。",
   "problem.braces": "“{name}”中的 { } 不成对。",
-
   "error.offline": "制作器没有在运行。请重新启动 app.py。",
   "error.server_error": "制作器出错了。详情请查看控制台窗口。",
   "error.not_loaded": "尚未加载游戏数据。",
@@ -225,7 +216,6 @@
   "error.unsupported_texture": "无法显示这种图片格式。",
   "error.forbidden": "拒绝访问。",
   "error.open_folder_failed": "无法打开模组文件夹。",
-
   "ai.mode.same": "与建立条件相同",
   "ai.mode.custom": "自定条件",
   "ai.mode.never": "AI 不会建立",
@@ -235,7 +225,6 @@
   "ai.weight_short": "权重 {value}",
   "ai.targets_short": "{count} 个建造目标",
   "ai.weight_script": "这个权重是用公式写的，请以脚本编辑。",
-
   "cond.add": "+ 新增条件…",
   "cond.add_one": "+ 新增",
   "cond.kind.tech": "已研究科技",
@@ -260,7 +249,6 @@
   "cond.era": "时代 {n}",
   "cond.clear": "清除",
   "cond.empty": "暂无。",
-
   "template.title": "快速范本：绑定地域的特色公司",
   "template.hint": "照原版特色公司的写法一次填好条件和 AI，之后仍可逐条修改。",
   "template.state": "所在地域",
@@ -272,7 +260,6 @@
   "template.confirm": "这会取代目前的条件、AI 建立条件和 AI 建造目标。要继续吗？",
   "template.need_state": "请先选择地域。",
   "template.applied": "已套用范本，请检查下方各项条件。",
-
   "nav.factory": "工厂",
   "home.type.factory": "工厂",
   "home.type.factory_hint": "新增带有自己生产方式的生产建筑，或修改已有的建筑。",
@@ -639,11 +626,9 @@
   "law.special": "税收与接受度",
   "law.special_hint": "税收法律按五种税率给修正；公民权法律按接受度给修正。",
   "law.start": "开局",
-  "law.start_hint": "哪些国家开局实行这条法律。写在所有开局历史之后执行的全局历史里，所以会取代那些国家原本在同组的法律。",
-  "law.start_countries": "开局实行的国家",
-  "law.start_countries_hint": "这些国家开局实行这条法律。",
+  "law.start_hint": "开局时的设置。各国自己的开局法律之后放在「国家开局」类型里设置。",
   "law.start_all": "所有国家开局实行",
-  "law.start_all_hint": "所有国家开局都实行这条法律；为同组其他法律选择的国家除外。",
+  "law.start_all_hint": "所有国家开局都实行这条法律。写在所有开局历史之后执行的全局历史里，所以会取代各国原本在这组的法律。",
   "law.start_default": "设为这组的默认法律",
   "law.start_default_hint": "开局历史没有设置这组法律的国家会用它。游戏用一组中最先读到的法律，所以这条法律会写在比原版更早读取的文件里（待在游戏中确认）。",
   "law.start_default_override": "只有新法律可以设为默认：已有法律的读取顺序无法改变。",
@@ -681,7 +666,6 @@
   "law.scripts_hint": "以脚本写的效果，空白的不会写出。",
   "law.extra_hint": "这个工具没有表单的法律字段，以脚本编辑。",
   "law.note_no_parent": "没有上层法律：所有利益集团对这条法律都中立，没有人会推动或反对它。",
-  "law.note_default_conditions": "默认法律有显示或颁布条件：看不到或不能颁布它的国家开局也会实行它。",
   "lproblem.key_missing": "法律需要键名。",
   "lproblem.key_invalid": "键名只能包含字母、数字、_、. 和 -。",
   "lproblem.key_exists": "已经有使用这个键名的法律。",
@@ -693,5 +677,17 @@
   "lproblem.modifier_value": "修正值必须是数字（或 yes/no）。",
   "lproblem.default_override": "已有的法律不能设为默认法律。",
   "lproblem.default_twice": "你的模组已有同组的另一条法律设为默认。",
-  "lproblem.all_twice": "你的模组已有同组的另一条法律设为所有国家开局实行。"
+  "lproblem.all_twice": "你的模组已有同组的另一条法律设为所有国家开局实行。",
+  "law.limit_countries": "限{names}",
+  "law.limit_cultures": "限{names}文化",
+  "law.limit_more": "（另有条件）",
+  "law.limit_other": "有显示条件",
+  "law.limit_hierarchy": "限{name}",
+  "law.limit_hierarchy_hint": "这组法律连接到一个社会阶层（common/social_hierarchies），只有部分人口属于它。",
+  "law.limit_enable": "有启用条件",
+  "law.limits": "限定",
+  "law.no_limits": "所有国家都能使用",
+  "law.limit_group_line": "法律组：{text}",
+  "law.limit_law_line": "这条法律：{text}",
+  "law.note_start_conditions": "这条法律有限定，却设成所有国家开局实行或默认法律：看不到或不能颁布它的国家开局也会实行它。"
 }

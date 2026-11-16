@@ -352,8 +352,13 @@ class GameData:
         """Laws with their groups, and what decides the interest groups' stances on them."""
         self.law_groups = {}
         for key, (block, _source, _file) in self.load_db("common/law_groups").items():
-            category = block.get("law_group_category")
-            self.law_groups[key] = {"category": category if isinstance(category, str) else ""}
+            category, hierarchy, enable = (block.get(name) for name in
+                                           ("law_group_category", "linked_social_hierarchy", "enable"))
+            self.law_groups[key] = {
+                "category": category if isinstance(category, str) else "",
+                # who the group is for: a social hierarchy (as the caste system), or its enable trigger
+                "hierarchy": hierarchy if isinstance(hierarchy, str) else "",
+                "enable": enable.inner() if isinstance(enable, Block) else ""}
         self.laws = {}
         origins = {}
         # in the order the game reads them: the first law of a group is its default
@@ -558,7 +563,8 @@ class GameData:
             "buy_packages": [[level, round(cost, 2)] for level, cost in sorted(self.buy_packages.items())],
             "working_adult_ratio": self.working_adult_ratio,
             "laws": laws,
-            "law_groups": [{"key": key, "name": loc.name(key), "category": group["category"]}
+            "law_groups": [{"key": key, "name": loc.name(key), **group,
+                            "hierarchy_name": loc.name(group["hierarchy"]) if group["hierarchy"] else ""}
                            for key, group in self.law_groups.items()],
             "law_categories": [{"key": key, "name": loc.name(text)} for key, text in LAW_CATEGORIES.items()],
             # only what the law pages need: stances on laws, and the ideologies interest groups start with
