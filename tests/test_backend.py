@@ -485,6 +485,40 @@ class ProjectTest(unittest.TestCase):
         self.assertEqual(keys("common/production_method_groups/zzz_works_buildings.txt"),
                          ["REPLACE_OR_CREATE:pmg_distillery"])
 
+    def test_imported_images(self):
+        folder = Path(project.create_project(str(self.mods), "Pics", "1.15.1"))
+        png = project.PNG_SIGNATURE + b"rest of a png"
+        icon = project.add_image(folder, "company_icon", "My Icon!.png", png)
+        self.assertEqual(icon["path"], f"gfx/interface/icons/pics_images/{icon['file']}")
+        self.assertTrue(icon["file"].startswith("company_icon_my_icon_") and icon["file"].endswith(".png"))
+        self.assertEqual(project.add_image(folder, "company_icon", "My Icon!.png", png), icon)  # same picture once
+        unused = project.add_image(folder, "pm_icon", "x.dds", b"DDS " + bytes(124))
+        kept = project.add_image(folder, "building_icon", "kept.png", project.PNG_SIGNATURE + b"other")
+        for kind, name, data, error in (("company_icon", "a.gif", b"GIF89a", "format"), ("../x", "a.png", png, "kind")):
+            with self.assertRaises(ValueError, msg=error):
+                project.add_image(folder, kind, name, data)
+        self.assertEqual(project.image_file(folder, icon["path"]), folder / project.IMAGE_STAGING / icon["file"])
+        self.assertIsNone(project.image_file(folder, "gfx/interface/icons/other.png"))
+
+        company = first_company(COMPANY)
+        company["icon"] = icon["path"]
+        proj = project.load_project(folder)
+        proj["companies"] = [company]
+        generated = project.save_project(folder, proj, keep_images=[kept["path"]])
+        # the used image is packed, the kept one waits, the unused one is gone
+        self.assertIn(icon["path"], generated)
+        self.assertEqual((folder / icon["path"]).read_bytes(), png)
+        self.assertEqual([i["path"] for i in project.load_project(folder)["images"]], [icon["path"], kept["path"]])
+        self.assertFalse((folder / project.IMAGE_STAGING / unused["file"]).exists())
+        self.assertFalse((folder / kept["path"]).exists())
+
+        # no longer used: removed from the mod and the project
+        proj = project.load_project(folder)
+        proj["companies"] = []
+        self.assertEqual(project.save_project(folder, proj), [])
+        self.assertFalse((folder / "gfx").exists())
+        self.assertEqual(project.load_project(folder)["images"], [])
+
     def test_stale_files_are_removed_but_nothing_else(self):
         folder = Path(project.create_project(str(self.mods), "Clean", "1.15.1"))
         mine = folder / "common" / "company_types" / "my_own_file.txt"
@@ -543,7 +577,7 @@ class InterfaceTextTest(unittest.TestCase):
                      "buildings_missing", "modifier_value", "braces"],
         "error.": ["offline", "server_error", "not_loaded", "no_project", "folders_invalid", "bad_request",
                    "not_found", "name_missing", "browse_unavailable", "bad_path", "unsupported_texture",
-                   "forbidden", "open_folder_failed"],
+                   "forbidden", "open_folder_failed", "image_kind", "image_too_large", "image_format"],
         "sidebar.category.": ["company", "factory"],
         "factory.kind.": ["ref", "own", "override"],
         "factory.target.": ["building", "state", "country"],

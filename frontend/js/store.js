@@ -51,6 +51,16 @@ export async function loadData() {
   return store.data;
 }
 
+// Imported images the items open in the editor pages use, by page: page -> () => paths.
+// Saves send them along so that the backend keeps them although nothing saved uses them yet.
+export const editingImages = new Map();
+
+// `except`: a page whose open item is going away (deleted), so its images do not count.
+export function keptImages(except = null) {
+  return [...editingImages].filter(([page]) => page !== except).flatMap(([, paths]) => paths())
+    .filter((path) => typeof path === 'string' && path);
+}
+
 // The mod being built, as the backend returned it.
 export function setProject(project) {
   store.project = project;

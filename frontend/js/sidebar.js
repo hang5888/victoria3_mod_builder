@@ -7,7 +7,7 @@
 // The list shows what is saved in the mod: a new item, or a change to one, appears after saving.
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { store, companyName, factoryName, setProject } from './store.js';
+import { store, companyName, factoryName, setProject, keptImages } from './store.js';
 import { h, fill, toast } from './ui.js';
 import { thumb } from './icons.js';
 import { run } from './widgets.js';
@@ -88,7 +88,7 @@ export function refreshSidebar() {
 // Write the mod's files from what is saved in it (the items listed here). The item being
 // edited is saved with the button of its own page.
 async function save() {
-  const result = await api.post('/api/project/save', {});
+  const result = await api.post('/api/project/save', { keep_images: keptImages() });
   setProject(result.project);
   refreshSidebar();
   toast(t('company.saved', { dir: result.dir }));

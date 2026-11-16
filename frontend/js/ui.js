@@ -76,6 +76,23 @@ export function confirmDialog(message, confirmLabel) {
   });
 }
 
+// Shows a picture with some lines of text; resolves to true when the user confirms.
+export function imageDialog({ title, src, lines = [], confirmLabel, wide = false }) {
+  return new Promise((resolve) => {
+    let answer = false;
+    const ok = h('button', { class: 'btn primary', onclick: () => { answer = true; close(); } }, confirmLabel || t('common.ok'));
+    const close = openModal(
+      h('div', { class: 'modal image-dialog' + (wide ? ' wide' : '') },
+        h('div', { class: 'modal-header' }, h('h3', {}, title)),
+        h('div', { class: 'image-dialog-picture' }, h('img', { src, alt: '' })),
+        lines.map((line) => h('p', { class: 'muted' }, line)),
+        h('div', { class: 'modal-footer' },
+          h('button', { class: 'btn', onclick: () => close() }, t('common.cancel')), ok)),
+      () => resolve(answer));
+    ok.focus();
+  });
+}
+
 const PAGE = 200;
 
 // A searchable list to choose from.

@@ -6,7 +6,8 @@
 // The production methods (pms) of an own group are entries of the same two types.
 import { api, textureUrl } from './api.js';
 import { t } from './i18n.js';
-import { store, refreshState, loadData, language, languageName, nameOf, factoryName, setProject } from './store.js';
+import { store, refreshState, loadData, language, languageName, nameOf, factoryName, setProject, editingImages,
+  keptImages } from './store.js';
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
 import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
 import { thumb, objectIcon, pickerIcon } from './icons.js';
@@ -314,7 +315,8 @@ function copyFactory(factory) {
 }
 
 async function save() {
-  const result = await api.post('/api/project/factory', { factory: editing, original_key: originalKey });
+  const result = await api.post('/api/project/factory',
+    { factory: editing, original_key: originalKey, keep_images: keptImages() });
   if (result.errors.length) {
     toast(result.errors.map(problemText).join('\n'), 'error');
     return;
@@ -331,7 +333,7 @@ async function remove(factory) {
   const current = factory.key === originalKey;
   const name = factoryName(current ? editing : factory);
   if (!(await confirmDialog(t('company.delete_confirm', { name }), t('company.delete')))) return;
-  setProject(await api.post('/api/project/factory/delete', { key: factory.key }));
+  setProject(await api.post('/api/project/factory/delete', { key: factory.key, keep_images: keptImages(current ? 'factory' : null) }));
   if (current) {
     dirty = false;
     await close();
@@ -353,6 +355,13 @@ async function close() {
 }
 
 const startFactory = () => run(() => edit(blankFactory(), null));
+
+editingImages.set('factory', () => {
+  if (!editing) return [];
+  const own = editing.pmgs.filter((entry) => entry.type === 'own');
+  return [editing.icon, editing.background, ...own.map((pmg) => pmg.texture),
+    ...own.flatMap((pmg) => pmg.pms.filter((pm) => pm.type === 'own').map((pm) => pm.texture))];
+});
 
 // What the sidebar needs from this page.
 const sidebarEditor = {
@@ -550,7 +559,7 @@ function basicSection() {
 }
 
 function imagesSection() {
-  const image = (name, label, paths, wide) => imageField({ label, value: editing[name], paths, wide,
+  const image = (name, label, paths, wide) => imageField({ label, value: editing[name], paths, wide, kind: `building_${name}`,
     onChange: (path) => { editing[name] = path; changed(); refresh('images'); } });
   return section(t('company.images'), t('company.images_hint'),
     image('icon', t('company.icon'), store.data.building_icons, false),
@@ -737,7 +746,7 @@ function pmgCard(entry, index) {
     h('div', { class: 'pair' },
       field(t('company.key'), keyInput(entry, 'pmg_my_group', touch)),
       field(nameLabel(), nameInput(entry, knownName(original), touch))),
-    imageField({ label: t('factory.pmg_icon'), value: entry.texture, paths: store.data.pmg_icons,
+    imageField({ label: t('factory.pmg_icon'), value: entry.texture, paths: store.data.pmg_icons, kind: 'pmg_icon',
       onChange: (path) => { entry.texture = path; restructured(); } }),
     h('span', { class: 'field-label' }, t('factory.pms')),
     entry.pms.map((pm, n) => (pm.type === 'own' ? pmEditor(entry, pm, n) : pmReference(entry, pm, n))),
@@ -880,7 +889,7 @@ function pmEditor(pmg, pm, index) {
     h('div', { class: 'pair' },
       field(t('company.key'), keyInput(pm, 'pm_my_method', touch)),
       field(nameLabel(), nameInput(pm, knownName(original), touch))),
-    imageField({ label: t('factory.pm_icon'), value: pm.texture, paths: store.data.pm_icons,
+    imageField({ label: t('factory.pm_icon'), value: pm.texture, paths: store.data.pm_icons, kind: 'pm_icon',
       onChange: (path) => { pm.texture = path; restructured(); } }),
     h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: pm.is_default, onchange: (event) => {

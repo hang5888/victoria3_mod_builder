@@ -1,8 +1,8 @@
 // Pieces shared by the editor pages: form parts, chips and source tags.
-import { textureUrl } from './api.js';
+import { api, textureUrl } from './api.js';
 import { t } from './i18n.js';
-import { store, nameOf } from './store.js';
-import { h, toast, errorText, openPicker } from './ui.js';
+import { store, nameOf, setProject } from './store.js';
+import { h, toast, errorText, openPicker, confirmDialog, imageDialog } from './ui.js';
 import { thumb, objectIcon, pickerIcon } from './icons.js';
 import { bracesBalanced } from './script.js';
 
@@ -67,25 +67,101 @@ export function scriptArea(get, set, onChange) {
   return area;
 }
 
-// An image path with a thumbnail and a picker over the given paths. onChange(path) stores
-// it and redraws.
-export function imageField({ label, value, paths, wide = false, onChange }) {
+// The size the game uses for each kind of image, and how a picture of another shape is fitted
+// (same as IMAGE_KINDS in backend/project.py).
+const IMAGE_SIZES = {
+  company_icon: [256, 256, 'contain'],
+  company_background: [1027, 496, 'cover'],
+  building_icon: [256, 256, 'contain'],
+  building_background: [652, 256, 'cover'],
+  pmg_icon: [120, 120, 'contain'],
+  pm_icon: [104, 104, 'contain'],
+};
+
+function readBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^[^,]*,/, ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+// Turn a picture file into a PNG of the game's size for this kind, after the user saw it.
+// DDS files are kept as they are. Resolves to the image's game path, or null when cancelled.
+async function importImage(kind, file) {
+  const [width, height, fit] = IMAGE_SIZES[kind];
+  const size = `${width}×${height}`;
+  let data;
+  if (/\.dds$/i.test(file.name)) {
+    if (!(await confirmDialog(t('image.dds_note', { size }), t('image.import_confirm')))) return null;
+    data = await readBase64(file);
+  } else {
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch {
+      toast(t('error.image_format'), 'error');
+      return null;
+    }
+    const canvas = h('canvas', { width, height });
+    const context = canvas.getContext('2d');
+    context.imageSmoothingQuality = 'high';
+    const scale = (fit === 'cover' ? Math.max : Math.min)(width / bitmap.width, height / bitmap.height);
+    const w = bitmap.width * scale;
+    const hgt = bitmap.height * scale;
+    context.drawImage(bitmap, (width - w) / 2, (height - hgt) / 2, w, hgt);
+    const src = canvas.toDataURL('image/png');
+    const ok = await imageDialog({
+      title: t('image.preview_title'), src, wide: fit === 'cover', confirmLabel: t('image.import_confirm'),
+      lines: [`${file.name}：${bitmap.width}×${bitmap.height} → ${size}`,
+        fit === 'cover' ? t('image.fit_cover', { size }) : t('image.fit_contain', { size }), t('image.packed_note')],
+    });
+    if (!ok) return null;
+    data = src.replace(/^[^,]*,/, '');
+  }
+  const result = await api.post('/api/project/image', { kind, name: file.name, data });
+  setProject(result.project);
+  return result.image.path;
+}
+
+// An image path with a thumbnail, a picker over the given paths, and (with a `kind`) an import
+// button for a picture of the user's own. onChange(path) stores it and redraws.
+export function imageField({ label, value, paths, wide = false, kind = null, onChange }) {
   const input = h('input', {
     class: 'input mono', type: 'text', spellcheck: false, value,
     onchange: () => onChange(input.value.trim()),
   });
+  // images imported into this mod come first
+  const imported = ((store.project && store.project.images) || []).filter((image) => image.kind === kind)
+    .map((image) => image.path);
+  const mine = new Set(imported);
   const choose = () => openPicker({
     title: label, multi: false, wide, selected: value ? [value] : [],
-    items: paths.map((path) => ({ key: path, name: path.split('/').pop().replace(/\.\w+$/, '') })),
+    items: [...imported, ...paths.filter((path) => !mine.has(path))].map((path) => ({
+      key: path,
+      name: (mine.has(path) ? `${t('image.imported')} · ` : '') + path.split('/').pop().replace(/\.\w+$/, ''),
+    })),
     thumb: (item) => textureUrl(item.key, wide ? 320 : 128),
     onDone: ([path]) => onChange(path),
   });
+  const upload = () => {
+    const file = h('input', { type: 'file', accept: 'image/*,.dds' });
+    file.addEventListener('change', () => run(async () => {
+      if (!file.files.length) return;
+      const path = await importImage(kind, file.files[0]);
+      if (path) onChange(path);
+    }));
+    file.click();
+  };
   return h('div', { class: 'image-field' + (wide ? ' wide' : '') },
     thumb(value, wide ? 320 : 128, 'image-thumb'),
     h('div', { class: 'grow' },
-      h('span', { class: 'field-label' }, label),
+      h('span', { class: 'field-label' }, label, mine.has(value) && h('span', { class: 'badge accent' }, t('image.imported'))),
       input,
-      h('button', { class: 'btn', onclick: choose }, t('common.choose'))));
+      h('div', { class: 'row' },
+        h('button', { class: 'btn', onclick: choose }, t('common.choose')),
+        kind && h('button', { class: 'btn', title: t('image.import_hint'), onclick: upload }, t('image.import')))));
 }
 
 // Game objects of a kind as picker items.

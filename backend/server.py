@@ -1,4 +1,6 @@
 """Local web server: serves the frontend and a JSON API for it."""
+import base64
+import binascii
 import json
 import mimetypes
 import os
@@ -79,9 +81,21 @@ class App:
             raise ApiError("no_project", 409)
         return path
 
-    def save_project(self, path, proj):
-        """Regenerate the mod's files; needs the game data for the texts copied from the game."""
-        return project.save_project(path, proj, self.require_data().modifier_templates)
+    def save_project(self, path, proj, body=None):
+        """Regenerate the mod's files; needs the game data for the texts copied from the game.
+
+        `body.keep_images`: imported images an unsaved item in the editor uses, so they stay.
+        """
+        keep = (body or {}).get("keep_images") or []
+        keep = [k for k in keep if isinstance(k, str)] if isinstance(keep, list) else []
+        return project.save_project(path, proj, self.require_data().modifier_templates, keep)
+
+    def project_image(self, rel):
+        """An image imported into the current project (not part of the game data)."""
+        try:
+            return project.image_file(self.require_project(), rel)
+        except (ApiError, OSError, ValueError):
+            return None
 
     def project_info(self):
         try:
@@ -156,6 +170,8 @@ class App:
         if key in self.texture_cache:
             return self.texture_cache[key]
         path = data.fs.resolve(rel)
+        if path is None:
+            path = self.project_image(rel)
         if path is None:
             raise ApiError("not_found", 404)
         try:
@@ -273,7 +289,7 @@ def api_post(app, path, body):
         with app.lock:
             path_ = app.require_project()
             proj = project.load_project(path_)
-            generated = app.save_project(path_, proj)
+            generated = app.save_project(path_, proj, body)
             return {"project": proj, "generated": generated, "dir": path_}
     if path == "/api/project/open_folder":
         open_folder(app.require_project())
@@ -285,7 +301,7 @@ def api_post(app, path, body):
             path_ = app.require_project()
             proj = project.load_project(path_)
             proj["companies"] = [c for c in proj["companies"] if c["key"] != body.get("key")]
-            app.save_project(path_, proj)
+            app.save_project(path_, proj, body)
             return proj
     if path == "/api/project/factory":
         return save_factory(app, body)
@@ -294,8 +310,17 @@ def api_post(app, path, body):
             path_ = app.require_project()
             proj = project.load_project(path_)
             proj["factories"] = [f for f in proj["factories"] if f["key"] != body.get("key")]
-            app.save_project(path_, proj)
+            app.save_project(path_, proj, body)
             return proj
+    if path == "/api/project/image":
+        try:
+            data = base64.b64decode(str(body.get("data") or ""), validate=True)
+            with app.lock:
+                image = project.add_image(app.require_project(), str(body.get("kind") or ""),
+                                          str(body.get("name") or ""), data)
+                return {"image": image, "project": project.load_project(app.require_project())}
+        except (ValueError, binascii.Error) as error:
+            raise ApiError("image_" + (str(error) if str(error) in ("kind", "too_large", "format") else "format"))
     raise ApiError("not_found", 404)
 
 
@@ -324,7 +349,7 @@ def save_company(app, body):
             proj["companies"].append(clean)
         else:
             proj["companies"][index] = clean
-        generated = app.save_project(path, proj)
+        generated = app.save_project(path, proj, body)
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
 
 
@@ -351,7 +376,7 @@ def save_factory(app, body):
             proj["factories"].append(clean)
         else:
             proj["factories"][index] = clean
-        generated = app.save_project(path, proj)
+        generated = app.save_project(path, proj, body)
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
 
 

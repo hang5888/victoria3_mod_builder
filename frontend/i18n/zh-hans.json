@@ -145,7 +145,7 @@
   "company.flavored": "特色（历史）公司",
   "company.flavored_hint": "特色公司与特定国家或地区绑定；通用公司则所有国家都可以建立。",
   "company.images": "图片",
-  "company.images_hint": "从游戏和已加载模组的图片中选择。暂不支持添加自己的图片。",
+  "company.images_hint": "从游戏和已加载模组的图片中选择，或导入自己的图片（保存时打包进模组）。",
   "company.icon": "图标",
   "company.background": "背景",
   "company.buildings": "建筑",
@@ -518,5 +518,17 @@
   "fset.gfx_clear": "清除范围内的其他建筑",
   "factory.extra_hint": "工具不认得的字段（例如模组新增的），原样写入。在这里输入已知的字段，离开文字框后会移到上方的表单。",
   "factory.pmg_extra_hint": "组中工具不认得的字段，原样写入。",
-  "factory.pm_extra_hint": "生产方式中工具不认得的字段，原样写入。"
+  "factory.pm_extra_hint": "生产方式中工具不认得的字段，原样写入。",
+  "image.import": "导入…",
+  "image.import_hint": "使用自己的图片（PNG、JPG、WebP 等，或 DDS）。保存时会打包进模组。",
+  "image.imported": "已导入",
+  "image.preview_title": "导入图片",
+  "image.import_confirm": "导入",
+  "image.fit_contain": "等比缩放放进 {size}，空白处透明。",
+  "image.fit_cover": "等比缩放填满 {size}，超出的部分以中央为准裁掉。",
+  "image.packed_note": "以 PNG 保存。保存时放进模组的 gfx 文件夹；没有任何项目使用的导入图片会在那时删除。",
+  "image.dds_note": "DDS 文件会原样导入，不会缩放（游戏这里用 {size}）。要导入吗？",
+  "error.image_kind": "这张图片不能用在这里。",
+  "error.image_too_large": "图片太大（最多 20 MB）。",
+  "error.image_format": "这个文件不是可以读取的图片。"
 }

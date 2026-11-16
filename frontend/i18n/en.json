@@ -145,7 +145,7 @@
   "company.flavored": "Flavored (historical) company",
   "company.flavored_hint": "Flavored companies are tied to specific countries or regions; generic ones are available to everyone.",
   "company.images": "Images",
-  "company.images_hint": "Pick from the images of the game and the loaded mods. Adding your own images is not supported yet.",
+  "company.images_hint": "Pick from the pictures of the game and the loaded mods, or import your own (packed into the mod when you save).",
   "company.icon": "Icon",
   "company.background": "Background",
   "company.buildings": "Buildings",
@@ -518,5 +518,17 @@
   "fset.gfx_clear": "Clear other buildings in it",
   "factory.extra_hint": "Fields the tool does not know (for example from mods), written as they are. Known fields typed here move to the form above.",
   "factory.pmg_extra_hint": "Fields of the group the tool does not know, written as they are.",
-  "factory.pm_extra_hint": "Fields of the method the tool does not know, written as they are."
+  "factory.pm_extra_hint": "Fields of the method the tool does not know, written as they are.",
+  "image.import": "Import…",
+  "image.import_hint": "Use a picture of your own (PNG, JPG, WebP… or DDS). It is packed into the mod when you save.",
+  "image.imported": "Imported",
+  "image.preview_title": "Import picture",
+  "image.import_confirm": "Import",
+  "image.fit_contain": "Scaled to fit {size}, keeping its shape; the space around it is transparent.",
+  "image.fit_cover": "Scaled to fill {size}, keeping its shape, and cut to size around the centre.",
+  "image.packed_note": "Saved as PNG. It goes into the mod's gfx folder when you save; imported pictures nothing uses are removed then.",
+  "image.dds_note": "DDS files are imported as they are, without resizing (the game uses {size} here). Import it?",
+  "error.image_kind": "This picture cannot be used here.",
+  "error.image_too_large": "The picture is too large (20 MB at most).",
+  "error.image_format": "This file is not a picture that can be read."
 }

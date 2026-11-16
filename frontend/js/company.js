@@ -2,7 +2,8 @@
 // and the existing companies (right).
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { store, refreshState, loadData, language, languageName, nameOf, companyName, setProject } from './store.js';
+import { store, refreshState, loadData, language, languageName, nameOf, companyName, setProject, editingImages,
+  keptImages } from './store.js';
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
 import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
 import { StateMap } from './map.js';
@@ -194,7 +195,8 @@ function copyCompany(company) {
 }
 
 async function save() {
-  const result = await api.post('/api/project/company', { company: editing, original_key: originalKey });
+  const result = await api.post('/api/project/company',
+    { company: editing, original_key: originalKey, keep_images: keptImages() });
   if (result.errors.length) {
     toast(result.errors.map(problemText).join('\n'), 'error');
     return;
@@ -211,7 +213,7 @@ async function remove(company) {
   const current = company.key === originalKey;
   const name = displayName(current ? editing : company);
   if (!(await confirmDialog(t('company.delete_confirm', { name }), t('company.delete')))) return;
-  setProject(await api.post('/api/project/company/delete', { key: company.key }));
+  setProject(await api.post('/api/project/company/delete', { key: company.key, keep_images: keptImages(current ? 'company' : null) }));
   if (current) {
     dirty = false;
     await close();
@@ -232,6 +234,8 @@ async function close() {
 }
 
 const startCompany = () => run(() => edit(blankCompany(), null));
+
+editingImages.set('company', () => (editing ? [editing.icon, editing.background] : []));
 
 // What the sidebar needs from this page.
 const sidebarEditor = {
@@ -368,7 +372,7 @@ function basicSection() {
 }
 
 function imageField(name, label, paths, wide) {
-  return imagePicker({ label, value: editing[name], paths, wide,
+  return imagePicker({ label, value: editing[name], paths, wide, kind: `company_${name}`,
     onChange: (path) => { editing[name] = path; changed(); refresh('images'); } });
 }
 
