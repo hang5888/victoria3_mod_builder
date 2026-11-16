@@ -93,7 +93,7 @@ pm_bakery = {
 | 建造條件 | 可建造的地方與時機；用條件清單（州範圍：地域是、地區已整合、腳本） | `potential`（能不能出現）、`possible`（現在能不能蓋） |
 | AI 價值 | 填數字（寫成 `ai_value = N`）；原本是公式的，改用腳本編輯 | `ai_value` |
 | 生產方式組 | 見 3.3 | `production_method_groups` |
-| 進階 | 其他欄位的腳本，原樣寫入（例如 `ownership_type`、`levels_per_mesh`、`ai_nationalization_desire`）；新工廠預設填入 `ownership_type = self` | 原樣 |
+| 進階 | 其他欄位的腳本，原樣寫入（例如 `ownership_type`、`levels_per_mesh`、`ai_nationalization_desire`）；新工廠預設填入 `ownership_type = self` 與 `levels_per_mesh = 50` | 原樣 |
 
 新工廠選到農業、牧場、種植園、採集類的群組時，提示：「這類建築要有地域資源才能建造（`arable_resources`／`capped_resources`），工具目前不會修改地域，需要另外處理」。
 
@@ -144,6 +144,7 @@ pm_bakery = {
 
 - 「修改（覆蓋）」：帶入編輯區修改，輸出後覆蓋原本的建築；它引用的生產方式組維持「引用現有」，要改時用「複製成自建」或「直接覆蓋」。
 - 「複製為新工廠」：當範本建立新工廠；生產方式組預設維持引用，可以再複製成自建。
+- 複製時自動移除特殊建築（港口、軍營、奇觀等）才有的欄位，並提示移除了哪些：`aliases`、`buildable`、`expandable`、`downsizeable`、`has_max_level`、`port`、`naval`、`recruits_combat_units`、`recruits_sailors`、`residence_points_per_level`、`unique`，以及 `terrain_manipulator = urban_*`。新工廠的「其他腳本」裡如果自己加了這些欄位，預覽欄會提醒。覆蓋現有建築時不移除（覆蓋要保留原本的行為）。
 - 重複定義的建築和公司一樣：顯示所有來源的標籤，展開後可選擇版本。
 
 ## 4. 和公司的整合

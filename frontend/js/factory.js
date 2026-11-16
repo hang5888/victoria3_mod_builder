@@ -10,7 +10,7 @@ import { store, refreshState, loadData, language, languageName, nameOf, factoryN
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
 import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
 import { thumb, objectIcon, pickerIcon } from './icons.js';
-import { bracesBalanced } from './script.js';
+import { bracesBalanced, parseScript, dedent } from './script.js';
 import { STATE_KINDS, conditionEditor, clearConditionCache, countConditions, valueButton } from './conditions.js';
 import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, pickerItems, imageField,
   scriptArea as scriptBox } from './widgets.js';
@@ -55,7 +55,7 @@ function blankFactory() {
     key: '', mode: 'new', names: {}, building_group: group, icon: '', background: defaults.background,
     city_type: defaults.city_type, required_construction: 'construction_cost_medium', unlocking_technologies: [],
     ai_value: '', blocks: Object.fromEntries(RAW_BLOCKS.map((name) => [name, ''])), pmgs: [],
-    extra: 'ownership_type = self',
+    extra: 'ownership_type = self\nlevels_per_mesh = 50',
   };
 }
 
@@ -307,9 +307,36 @@ function overrideFactory(factory) {
   return edit({ ...factory, mode: 'override', names: {} }, null, true);
 }
 
-function copyFactory(factory) {
+// Fields of special buildings (ports, barracks, monuments…) that a new production building
+// must not keep: the game would treat it as one of those, or not let it be built.
+const SPECIAL_FIELDS = new Set(['aliases', 'buildable', 'expandable', 'downsizeable', 'has_max_level', 'port',
+  'naval', 'recruits_combat_units', 'recruits_sailors', 'residence_points_per_level', 'unique']);
+const SPECIAL_TERRAIN = /^urban_/;  // terrain_manipulator of city centres and ports
+
+function isSpecial(entry) {
+  return SPECIAL_FIELDS.has(entry.key)
+    || (entry.key === 'terrain_manipulator' && typeof entry.value === 'string' && SPECIAL_TERRAIN.test(entry.value));
+}
+
+// Special fields found in a script: the field names, in order.
+function specialFields(text) {
+  const entries = parseScript(text) || [];
+  return [...new Set(entries.filter(isSpecial).map((entry) => entry.key))];
+}
+
+// The script without its special fields. Untouched when there are none (keeps comments).
+function withoutSpecial(text) {
+  const entries = parseScript(text);
+  if (!entries || !entries.some(isSpecial)) return text;
+  return entries.filter((entry) => !isSpecial(entry)).map((entry) => dedent(text.slice(entry.start, entry.end))).join('\n');
+}
+
+async function copyFactory(factory) {
   const names = knownName(factory) ? { [language()]: factory.name } : {};
-  return edit({ ...factory, mode: 'new', key: freeKey('factories', `${factory.key}_copy`), names }, null, true);
+  const dropped = specialFields(factory.extra);
+  const extra = withoutSpecial(factory.extra);
+  await edit({ ...factory, mode: 'new', key: freeKey('factories', `${factory.key}_copy`), names, extra }, null, true);
+  if (dropped.length && editing && editing.extra === extra) toast(t('factory.special_removed', { fields: dropped.join(', ') }));
 }
 
 async function save() {
@@ -443,6 +470,8 @@ function renderPreview() {
   if (factory.mode === 'new' && !Object.values(factory.names).some(Boolean)) notes.push(t('note.no_name'));
   const group = store.index.building_groups.get(factory.building_group);
   if (factory.mode === 'new' && group && group.needs_resources) notes.push(t('factory.resource_note'));
+  const special = factory.mode === 'new' ? specialFields(factory.extra) : [];
+  if (special.length) notes.push(t('factory.special_note', { fields: special.join(', ') }));
   const filled = store.state.languages.filter((l) => factory.names[l.key]);
   const conditionChips = RAW_BLOCKS.filter((name) => factory.blocks[name].trim()).map((name) =>
     h('span', { class: 'chip', title: name }, `${t('fblock.title.' + name)} · ${countConditions(factory.blocks[name])}`));

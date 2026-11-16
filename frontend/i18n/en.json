@@ -296,6 +296,8 @@
   "factory.key_hint": "Internal name used in the files. Letters, digits and _ only, usually starting with building_.",
   "factory.group": "Building group",
   "factory.group_hint": "Decides what kind of building it is: industry, farm, ranch, plantation or resource extraction.",
+  "factory.special_removed": "Removed fields of special buildings that a new factory should not have: {fields}",
+  "factory.special_note": "The other script has fields of special buildings (ports, barracks, monuments…): {fields}. A new factory with them may not be buildable, or may work like that kind of building.",
   "factory.resource_note": "Buildings in this group can only be built where the state region lists them (arable_resources / capped_resources). This tool does not change state regions yet, so that needs to be done separately.",
   "factory.city_type": "City type",
   "factory.city_type_none": "(none)",

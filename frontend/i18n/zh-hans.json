@@ -296,6 +296,8 @@
   "factory.key_hint": "文件中使用的内部名称。只用字母、数字和 _，通常以 building_ 开头。",
   "factory.group": "建筑群组",
   "factory.group_hint": "决定建筑的种类：工业、农场、牧场、种植园或资源采集。",
+  "factory.special_removed": "已移除新工厂不应有的特殊建筑字段：{fields}",
+  "factory.special_note": "其他脚本中有特殊建筑（港口、军营、奇观等）的字段：{fields}。新工厂带有这些字段可能无法建造，或会被当成那类建筑。",
   "factory.resource_note": "这类建筑要有地域资源才能建造（地域的 arable_resources / capped_resources 中要列出它）。工具目前不会修改地域，需要另外处理。",
   "factory.city_type": "城市类型",
   "factory.city_type_none": "（无）",
