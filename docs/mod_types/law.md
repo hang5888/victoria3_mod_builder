@@ -1,0 +1,178 @@
+# 模組類型：法律
+
+> 共用的部分（資料讀取、編輯頁框架、sidebar、選擇器、圖片導入、條件清單、輸出規則）見 [主程式規格](../mod_builder.md)。
+> 遊戲檔案格式對照 1.15.1。
+
+可以新增法律，也可以修改、覆蓋現有的法律。狀態：規格撰寫中，第 6 節的待確認事項回覆後再開始實作。
+
+## 1. 遊戲中的結構
+
+一條法律由這幾部分組成：
+
+| 部分 | 位置 | 內容 |
+| --- | --- | --- |
+| 法律 | `common/laws/` | 所屬法律組、圖示、進步程度、效果（修正）、解鎖條件、頒布條件、頒布／生效時執行的腳本、AI |
+| 法律組 | `common/law_groups/` | 法律的分類（權力結構、經濟、人權），同一組裡一次只能實行一條 |
+| 意識形態 | `common/ideologies/` | 每個意識形態對每條法律的態度（強烈支持、支持、中立、反對、強烈反對） |
+| 利益集團 | `common/interest_groups/` | 每個利益集團一開始有哪些意識形態，因此支持或反對哪些法律 |
+| 制度 | `common/institutions/` | 部分法律會建立制度（例如工作場所安全），可以投資提升等級 |
+| 開局法律 | `common/history/countries/` | 各國開局時實行的法律（`activate_law = law_type:law_x`） |
+| 翻譯 | `localization/` | 法律名稱 `law_x`、說明 `law_x_desc`；法律組 `lawgroup_x`、`lawgroup_x_desc` |
+| 圖示 | `gfx/interface/icons/law_icons/` | 原版多為 302×302（69 張）或 256×256（60 張） |
+
+範例（原版 `law_worker_protections`）：
+
+```
+law_worker_protections = {
+    group = lawgroup_labor_rights
+    icon = "gfx/interface/icons/law_icons/worker_protections.dds"
+    progressiveness = 100
+    unlocking_technologies = { human_rights }
+    institution = institution_workplace_safety
+    institution_modifier = { building_minimum_wage_mult = 0.1 }
+    ai_enact_weight_modifier = { ... }   # 原版幾乎每條法律都是同一段「請願」寫法
+}
+```
+
+意識形態裡的態度（`common/ideologies/00_ig_ideologies.txt`，節錄）：
+
+```
+ideology_paternalistic = {
+    lawgroup_labor_rights = {
+        law_no_workers_rights = neutral
+        law_regulatory_bodies = disapprove
+        law_worker_protections = strongly_disapprove
+    }
+}
+```
+
+### 1.1 原版統計
+
+原版有 148 條法律、26 個法律組，分成三類：權力結構 10 組、經濟 8 組、人權 8 組。
+
+各欄位有多少條法律使用：
+
+| 欄位 | 數量 | 意思 |
+| --- | --- | --- |
+| `group`、`icon`、`progressiveness` | 148 | 所屬法律組、圖示、進步程度 |
+| `ai_enact_weight_modifier` | 146 | AI 想頒布的程度（幾乎都是同一段「請願」寫法） |
+| `modifier` | 129 | 實行時給國家的修正 |
+| `unlocking_technologies` | 75 | 需要的科技 |
+| `ai_will_do` | 63 | AI 是否會考慮這條法律（條件） |
+| `on_enact` | 58 | 頒布過程中執行的腳本 |
+| `disallowing_laws` | 50 | 實行這些法律時不能頒布 |
+| `on_activate` | 48 | 法律生效時執行的腳本 |
+| `can_impose`、`ai_impose_chance` | 47、38 | 宗主國能不能把這條法律強加給附庸、AI 強加的機率 |
+| `is_visible` | 43 | 什麼國家看得到這條法律（條件） |
+| `can_enact` | 32 | 頒布條件 |
+| `institution`、`institution_modifier` | 25、21 | 建立的制度、制度的修正（依制度投資等級計算，待在遊戲確認） |
+| `parent` | 22 | 「上層法律」：沿用它的意識形態態度，並被當成它的變體（見 1.2） |
+| `unlocking_laws`、`requires_law_or` | 17、6 | 需要先實行某些法律（兩者的差別待查） |
+| `on_deactivate` | 9 | 法律被取代時執行的腳本 |
+| `tax_modifier_very_low` … `tax_modifier_very_high` | 7 | 稅收法律在五種稅率下的修正 |
+| `acceptance_modifier` | 7 | 公民權法律對各接受度的修正 |
+
+法律組的欄位：`law_group_category`（分類）、`ideological_opinion_impact`（國家間意識形態好感的權重）、`base_enactment_days`（頒布天數）、`enactment_approval_mult`、`affected_by_regime_change`、`change_allowed_trigger`、`linked_social_hierarchy`、`enable`。
+
+### 1.2 新法律和其他內容的關係
+
+這是做法律最需要注意的地方：
+
+- **利益集團的態度寫在意識形態裡，不在法律裡。** 新法律如果沒有任何意識形態提到它，所有利益集團對它都是中立：不會有利益集團推動或反對，政治運動也不會支持它。
+- **`parent` 可以解決大部分問題。** 原版註解寫「Inherits ideological stances from parent」：設了 `parent` 的法律沿用上層法律的意識形態態度。而且遊戲裡用 `has_law_or_variant` 檢查的地方（原版 3352 處，例如政體、政黨、日誌）會把它當成上層法律的變體。只用 `has_law` 檢查特定法律的地方（原版 1074 處）不會。
+- **要讓意識形態對新法律有不同的態度**，就要修改意識形態檔。原版的意識形態有 183 個；用 `INJECT` 加進去時，同一個法律組會出現兩段，遊戲會不會合併要在遊戲裡確認。
+- **新的法律組**完全沒有意識形態提到。你啟用的模組 3472248460 的做法是建立新的意識形態，再用腳本效果 `add_ideology` 加到利益集團上，相當複雜。
+- **很多遊戲內容檢查特定法律**（例如 `law_monarchy` 被引用 379 次）。覆蓋原版法律時只改效果比較安全；改代碼或刪除會讓這些內容失效。
+
+## 2. 資料
+
+除了主程式已讀的資料（科技、修正、法律名稱等），另外讀取：
+
+| 資料 | 用途 | 來源位置 |
+| --- | --- | --- |
+| 法律（全部欄位） | 右欄的現有法律清單、範本 | `common/laws/` |
+| 法律組 | 法律組選項、分類 | `common/law_groups/` |
+| 意識形態 | 顯示各利益集團對法律的態度 | `common/ideologies/` |
+| 利益集團 | 利益集團的基本意識形態 | `common/interest_groups/` |
+| 制度 | 制度選項 | `common/institutions/` |
+| 圖片 | 法律圖示 | `gfx/interface/icons/law_icons/` 等（加上法律實際引用的路徑） |
+
+和公司、工廠一樣，重複定義的法律記錄所有來源與各來源的版本。
+
+## 3. 畫面
+
+| Sidebar | 預覽欄 | 編輯區 | 右欄 |
+| --- | --- | --- | --- |
+| 模組內容（分類「法律」） | 正在編輯的法律 | 各種選項 | 現有的法律（可篩選） |
+
+### 3.1 預覽欄
+
+- 名稱、圖示、法律組與分類、進步程度、解鎖科技。
+- 效果摘要（修正）；有制度時顯示制度與制度修正。
+- 各利益集團的態度：依每個利益集團的基本意識形態，列出支持、中立、反對（有 `parent` 時用上層法律的態度）。
+- 同一組的其他法律與它們的進步程度，方便比較。
+- 各語言名稱是否已填；問題提示。
+
+### 3.2 編輯區
+
+| 區塊 | 項目 | 寫成 |
+| --- | --- | --- |
+| 基本資訊 | 代碼（慣例 `law_` 開頭）、名稱、說明、法律組、進步程度 | 定義的鍵、翻譯 `law_x`／`law_x_desc`、`group`、`progressiveness` |
+| 圖片 | 圖示；可選現有或導入 | `icon` |
+| 利益集團的態度 | 見待確認 2 | `parent` 或意識形態 |
+| 解鎖與限制 | 解鎖科技、需要的法律、不相容的法律、顯示條件、頒布條件 | `unlocking_technologies`、`unlocking_laws`／`requires_law_or`、`disallowing_laws`、`is_visible`、`can_enact` |
+| 效果 | 國家修正（和公司的繁榮修正同樣的修正清單）；制度與制度修正 | `modifier`、`institution`、`institution_modifier` |
+| 特殊效果 | 只在對應的法律組出現：稅收的五種稅率修正、公民權的接受度修正 | `tax_modifier_*`、`acceptance_modifier` |
+| 腳本 | 頒布中、生效、被取代時執行的腳本（見待確認 5） | `on_enact`、`on_activate`、`on_deactivate` |
+| AI | AI 想頒布的程度（預設原版的請願寫法）、AI 是否考慮、強加給附庸 | `ai_enact_weight_modifier`、`ai_will_do`、`can_impose`、`ai_impose_chance` |
+| 其他腳本 | 工具不認得的欄位 | 原樣 |
+
+- 顯示條件、頒布條件用條件清單（國家範圍）。
+- 「需要的法律」「不相容的法律」用選擇器，選項是所有法律，依法律組分組顯示。
+
+### 3.3 右欄：現有的法律
+
+列出遊戲本體與已加載模組中的法律，可篩選：名稱搜尋、來源、分類、法律組。
+
+- 「修改（覆蓋）」：帶入編輯區修改，輸出後覆蓋原本的法律。
+- 「複製為新法律」：當範本建立新法律。〔初版做法〕複製時預設 `parent` 設成被複製的法律，讓新法律沿用它的態度。
+- 重複定義的法律和公司一樣顯示所有來源的標籤，可選擇版本。
+
+## 4. 輸出
+
+- 法律：`common/laws/zzz_<模組>_laws.txt`
+- 翻譯：名稱與說明，只有填寫的語言；覆蓋的名稱寫在 `replace/`。
+- 覆蓋現有法律：`REPLACE_OR_CREATE:<代碼> = { ... }`，寫出完整定義。
+- 導入的圖片照主程式規格打包。〔初版做法〕法律圖示的導入尺寸用 302×302（原版最多的尺寸），等比縮放放進正方形。
+- 依待確認事項的回覆，可能還有：法律組 `common/law_groups/zzz_<模組>_laws.txt`、意識形態、開局法律 `common/history/countries/zzz_<模組>_laws.txt`。
+
+## 5. 初版不做（建議）
+
+- 新增制度（只能選原版的 6 個制度）。
+- 修正案（`common/amendments/`）。
+- 政體、政黨、政治運動等依法律判斷的內容。
+
+## 6. 待確認事項
+
+1. **範圍**：這一版要做到哪裡？
+   - A. 新增法律（放進現有法律組）＋修改、覆蓋現有法律〔建議〕
+   - B. A ＋ 新增法律組
+   - C. B ＋ 修正案
+   - 回覆：
+2. **利益集團的態度**：新法律的態度怎麼決定？
+   - A. 只用 `parent`：選同一組的一條現有法律當上層，沿用它的態度，也被遊戲當成它的變體。不改意識形態檔，最安全〔建議〕
+   - B. A ＋ 可以逐一設定各意識形態的態度：要用 `INJECT` 修改意識形態檔，寫法要先在遊戲裡驗證
+   - C. 不處理，所有利益集團都中立
+   - 回覆：
+3. **新法律組的態度**（第 1 題選 B 或 C 才需要）：
+   - A. 全部中立〔建議〕
+   - B. 建立新的意識形態，並加到利益集團上（要改利益集團，和其他模組衝突的風險大）
+   - 回覆：
+4. **開局法律**：要不要能設定「哪些國家開局就實行這條法律」？會寫 `common/history/countries/`，取代那些國家原本在同一組的法律。
+   - A. 要
+   - B. 不要，初版只能在遊戲中頒布〔建議〕
+   - 回覆：
+5. **腳本欄位**：`on_enact`、`on_activate`、`on_deactivate` 是效果腳本，工具目前只有條件清單、沒有效果編輯器。用腳本文字框（附原版常見寫法當範例）可以嗎？
+   - 回覆：
+6. **入口**：首頁類型卡片、上方導覽、sidebar 分類都加「法律」？〔建議：都加〕
+   - 回覆：
