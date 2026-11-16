@@ -110,9 +110,10 @@ pm_bakery = {
 | --- | --- |
 | 常用 | `ownership_type`、`terrain_manipulator`、`levels_per_mesh`、`ai_nationalization_desire`、`buildable`、`expandable`、`downsizeable`、`aliases` |
 | 經濟與員工 | `can_switch_owner`、`min_raise_to_hire`、`slaves_role`、`economic_contribution`、`residence_points_per_level`、`generates_residences`、`category_building_type`、`valid_pop_culture_traits`、`investment_scores`（腳本） |
-| 特殊建築 | `unique`、`has_max_level`、`ignore_stateregion_max_level`、`port`、`naval`、`recruits_combat_units`、`recruits_sailors`、`company_headquarter`、`statue`、`enable_air_connection`、`strait`、`lens` |
-| 地圖與模型 | `locator`、`entity_not_constructed`、`entity_under_construction`、`entity_constructed`（從已加載建築用過的模型選，或空白）、`city_gfx_interactions`（大小＋清除範圍）、`meshes`（腳本） |
 | 建造條件 | `can_build_government`、`can_build_private`（條件清單，州範圍）、`can_have_country_monopoly`（條件清單，國家範圍）、`should_auto_expand`（條件清單，認不出的條件以腳本列保留）、`construction_modifier`（腳本） |
+| 其他 | `ignore_stateregion_max_level`、`lens` |
+
+只列生產建築會用到的欄位。奇觀、港口、軍事建築、運河、勢力集團雕像才有的欄位（`unique`、`has_max_level`、`port`、`naval`、`recruits_combat_units`、`recruits_sailors`、`company_headquarter`、`statue`、`enable_air_connection`、`strait`、`locator`、`entity_*`、`city_gfx_interactions`、`meshes`）不在表單裡；從這類建築複製來時，它們留在「其他腳本」。奇觀改在奇觀頁編輯（見 [monument.md](monument.md)）。
 
 生產方式組：`ai_selection`、`is_hidden_when_unavailable`。
 
@@ -120,7 +121,7 @@ pm_bakery = {
 
 - 控制項依欄位種類：勾選（只寫出和遊戲預設不同的值）、數字、下拉、文字、選一個或多個遊戲物件（科技、法律、商品、人口類型、宗教、原則、勢力集團身份、地理區域、運河、文化特徵、建造菜單分類等，選項從已加載的資料讀取）、條件清單、數值列（職業比例）、腳本框。
 - 欄位清單來自原版 1.15.1 實際用到的欄位，加上 `buildings.md`、`production_methods.md` 有記載的欄位。說明檔記載但已過時的欄位不列：`can_build`（遊戲不使用）、`construction_points`（改用 `required_construction`）、`owners`、`ai_privatization_desire`、`production_methods`。
-- 會讓生產建築無法使用、或變成別種建築的欄位，上方一直顯示黃字警告（不彈窗）；設成有問題的值時，警告前加上 ⚠、文字加粗，欄位加上黃框。新工廠和覆蓋現有建築都一樣顯示。有警告的欄位：`ownership_type`（不是 self 時）、`terrain_manipulator`（`urban_*`）、`buildable`／`expandable`（取消時）、`aliases`、`locator`、`strait`（有值時）、`unique`、`has_max_level`、`port`、`naval`、`recruits_combat_units`、`recruits_sailors`、`company_headquarter`、`statue`（勾選時）、`entity_not_constructed`、`entity_constructed`（有設定時）。
+- 會讓生產建築無法使用的欄位，上方一直顯示黃字警告（不彈窗）；設成有問題的值時，警告前加上 ⚠、文字加粗，欄位加上黃框。有警告的欄位：`ownership_type`（不是 self 時）、`terrain_manipulator`（`urban_*`）、`buildable`／`expandable`（取消時）、`aliases`（有值時）。
 
 ### 3.3 編輯區：生產方式組
 
@@ -163,7 +164,7 @@ pm_bakery = {
 
 ### 3.5 右欄：目前所有的建築
 
-列出遊戲本體與已加載模組中的所有建築，可篩選：名稱搜尋、來源、建築群組、產出商品、投入商品。
+列出遊戲本體與已加載模組中的生產建築（建築群組屬於工業、農業、牧場、種植園、採集，不含自給類），可篩選：名稱搜尋、來源、建築群組、產出商品、投入商品。奇觀、政府、軍事、基礎設施、城鎮設施等不列。
 
 - 建築群組的選項依上下層排列並縮排（例如「制造业」底下是「轻工业」「重工业」）；選上層群組時，底下所有子群組的建築都會列出，數量也包含子群組。
 

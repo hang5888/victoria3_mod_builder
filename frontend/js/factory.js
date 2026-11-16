@@ -962,17 +962,15 @@ function aiSection() {
 // in its other script (`extra`). The known ones are edited as form controls (scriptfields.js);
 // the text box only shows what the tool does not know, for example fields added by mods.
 
-const yes = (value) => value === 'yes';
 const no = (value) => value === 'no';
 const given = (value) => (Array.isArray(value) ? value.length > 0 : Boolean(value));
 const OWNERSHIP = ['self', 'other', 'no_ownership'];
 const flag = (key, fallback, more = {}) => ({ key, kind: 'flag', default: fallback, ...more });
 const buildingTexts = () => store.data.factories.map((factory) => factory.extra);
-const entities = () => usedValues(buildingTexts(), 'entity_constructed')
-  .concat(usedValues(buildingTexts(), 'entity_not_constructed'), usedValues(buildingTexts(), 'entity_under_construction'))
-  .filter((value, i, all) => all.indexOf(value) === i).sort();
 
-const BUILDING_GROUPS = ['economy', 'special', 'map', 'conditions'];
+// Only fields of production buildings: those of monuments, ports, military buildings, canals and
+// statues are not offered (they stay in the other script of a building copied from one).
+const BUILDING_GROUPS = ['economy', 'conditions', 'misc'];
 const BUILDING_SCRIPT_FIELDS = [
   { key: 'ownership_type', kind: 'select', options: OWNERSHIP, hint: true, risky: (value) => value !== 'self',
     label: (option) => (OWNERSHIP.includes(option) ? `${t('fset.ownership.' + option)} (${option})` : option) },
@@ -995,25 +993,8 @@ const BUILDING_SCRIPT_FIELDS = [
   { key: 'valid_pop_culture_traits', group: 'economy', kind: 'keys', pick: 'culture_traits', hint: true },
   { key: 'investment_scores', group: 'economy', kind: 'block', hint: true },
 
-  flag('unique', false, { group: 'special', risky: yes }),
-  flag('has_max_level', false, { group: 'special', risky: yes }),
-  flag('ignore_stateregion_max_level', false, { group: 'special', hint: true }),
-  flag('port', false, { group: 'special', risky: yes }),
-  flag('naval', false, { group: 'special', risky: yes }),
-  flag('recruits_combat_units', false, { group: 'special', risky: yes }),
-  flag('recruits_sailors', false, { group: 'special', risky: yes }),
-  flag('company_headquarter', false, { group: 'special', risky: yes }),
-  flag('statue', false, { group: 'special', risky: yes }),
-  flag('enable_air_connection', false, { group: 'special', hint: true }),
-  { key: 'strait', group: 'special', kind: 'key', pick: 'straits', risky: given },
-  { key: 'lens', group: 'special', kind: 'key', pick: 'lenses', hint: true },
-
-  { key: 'locator', group: 'map', kind: 'text', hint: true, risky: given },
-  { key: 'entity_not_constructed', group: 'map', kind: 'entity', options: entities, risky: (value) => value !== null },
-  { key: 'entity_under_construction', group: 'map', kind: 'entity', options: entities, hint: true },
-  { key: 'entity_constructed', group: 'map', kind: 'entity', options: entities, risky: (value) => value !== null },
-  { key: 'city_gfx_interactions', group: 'map', kind: 'gfx', hint: true },
-  { key: 'meshes', group: 'map', kind: 'block', hint: true },
+  flag('ignore_stateregion_max_level', false, { group: 'misc', hint: true }),
+  { key: 'lens', group: 'misc', kind: 'key', pick: 'lenses', hint: true },
 
   { key: 'can_build_government', group: 'conditions', kind: 'conditions', kinds: STATE_KINDS, hint: true },
   { key: 'can_build_private', group: 'conditions', kind: 'conditions', kinds: STATE_KINDS, hint: true },
@@ -1156,6 +1137,13 @@ function goodsOf(factory) {
   return goodsCache.get(factory.key);
 }
 
+// Buildings this page is for: production buildings (not monuments, government, military,
+// infrastructure or the subsistence buildings).
+function isProduction(factory) {
+  const group = store.index.building_groups.get(factory.building_group);
+  return Boolean(group && group.production);
+}
+
 function matchesFilters(factory) {
   const query = filters.query.trim().toLowerCase();
   if (query && !(factory.name || '').toLowerCase().includes(query) && !factory.key.toLowerCase().includes(query)) return false;
@@ -1263,7 +1251,7 @@ function renderList() {
       t('common.show_more', { count: matches.length - listLimit })));
   }
   els.list.replaceChildren(...rows);
-  els.count.textContent = t('company.count', { count: matches.length, total: store.data.factories.length });
+  els.count.textContent = t('company.count', { count: matches.length, total: listed.length });
 }
 
 function filterSelect(name, label, options) {
@@ -1281,14 +1269,16 @@ function renderRight() {
   const byName = (a, b) => a[1].localeCompare(b[1]);
   const count = (keysOf) => {
     const counts = new Map();
-    for (const factory of data.factories) for (const key of keysOf(factory)) counts.set(key, (counts.get(key) || 0) + 1);
+    for (const factory of data.factories.filter(isProduction)) {
+      for (const key of keysOf(factory)) counts.set(key, (counts.get(key) || 0) + 1);
+    }
     return counts;
   };
   const options = (counts, kind) => [...counts].map(([key, n]) => [key, `${nameOf(kind, key)} (${n})`]).sort(byName);
   const sourceCounts = count((factory) => factory.sources);
   // Base game first, then the mods in load order, each building where it was first defined.
   const rank = new Map(data.sources.map((source, i) => [source.id, i]));
-  listed = [...data.factories].sort((a, b) => rank.get(a.sources[0]) - rank.get(b.sources[0]));
+  listed = data.factories.filter(isProduction).sort((a, b) => rank.get(a.sources[0]) - rank.get(b.sources[0]));
   const sources = data.sources.filter((s) => sourceCounts.has(s.id))
     .map((s) => [s.id, `${sourceName(s.id)} (${sourceCounts.get(s.id)})`]);
   els.list = h('div', { class: 'company-list' });
