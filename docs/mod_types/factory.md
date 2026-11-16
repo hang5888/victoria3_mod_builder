@@ -93,27 +93,34 @@ pm_bakery = {
 | 建造條件 | 可建造的地方與時機；用條件清單（州範圍：地域是、地區已整合、腳本） | `potential`（能不能出現）、`possible`（現在能不能蓋） |
 | AI 價值 | 填數字（寫成 `ai_value = N`）；原本是公式的，改用腳本編輯 | `ai_value` |
 | 生產方式組 | 見 3.3 | `production_method_groups` |
-| 建築設置 | 常用欄位的表單，見 3.2.1 | 寫在其他腳本裡 |
-| 進階 | 其他欄位的腳本，原樣寫入（例如 `ownership_type`、`levels_per_mesh`、`ai_nationalization_desire`）；新工廠預設填入 `ownership_type = self` 與 `levels_per_mesh = 50` | 原樣 |
+| 建築設置 | 其他腳本裡工具認得的欄位，做成表單，見 3.2.1 | 寫在其他腳本裡 |
+| 進階 | 工具不認得的欄位的腳本，原樣寫入（例如 `ownership_type`、`levels_per_mesh`、`ai_nationalization_desire`）；新工廠預設填入 `ownership_type = self` 與 `levels_per_mesh = 50` | 原樣 |
 
 新工廠選到農業、牧場、種植園、採集類的群組時，提示：「這類建築要有地域資源才能建造（`arable_resources`／`capped_resources`），工具目前不會修改地域，需要另外處理」。
 
-#### 3.2.1 建築設置
+#### 3.2.1 建築設置（其他腳本的欄位）
 
-「其他腳本」裡常用的欄位做成表單。值仍存在其他腳本裡：表單讀取腳本、改動時只改寫那一行（沒設定就刪掉那一行），兩邊隨時一致，其他內容和註解不受影響。腳本括號不成對時表單停用。
+建築、生產方式組、生產方式的「其他腳本」裡，工具認得的欄位都做成表單（`frontend/js/scriptfields.js`）。值仍存在其他腳本裡：表單讀取腳本，改動時只改寫那一行（回到遊戲預設值就刪掉那一行），其他內容和註解不受影響。腳本括號不成對時表單停用，文字框改為編輯完整腳本，修正後恢復。
 
-| 欄位 | 控制項 | 黃字警告的內容；括號內是會標出 ⚠ 和外框的值 |
-| --- | --- | --- |
-| `ownership_type` | 下拉：self／other／no_ownership／未設定 | 生產建築應設為 self（不是 self 時） |
-| `terrain_manipulator` | 下拉：已加載建築用到的值 | 城市中心、港口專用的外觀（`urban_*`） |
-| `levels_per_mesh`、`ai_nationalization_desire`、`residence_points_per_level` | 數字 | 無 |
-| `buildable`、`expandable`、`downsizeable` | 勾選（預設是） | `buildable`、`expandable`：取消後的影響（取消時） |
-| `unique`、`has_max_level`、`port`、`naval`、`recruits_combat_units`、`recruits_sailors` | 勾選（預設否） | 奇觀／港口／軍事建築專用；`has_max_level` 會讓上限為 0（勾選時） |
-| `aliases` | 文字（空格分隔） | 原版建築的舊名稱，會衝突（有值時） |
-| `locator` | 文字 | 奇觀的地圖位置（有值時） |
+「其他腳本」文字框只顯示工具不認得的欄位（例如模組新增的）；在裡面輸入認得的欄位，離開文字框後會移到表單。
 
-- 勾選類只寫出和遊戲預設不同的值。
-- 黃字警告一直顯示在欄位上方（不彈窗），讓人在改之前就知道影響；設成會出問題的值時，警告前加上 ⚠、文字加粗，欄位加上黃框。新工廠和覆蓋現有建築都一樣顯示。
+建築的欄位：常用的一直顯示，其他依用途分成可收合的群組；群組裡有已設定的欄位時自動展開，並顯示已設定的數量。
+
+| 群組 | 欄位 |
+| --- | --- |
+| 常用 | `ownership_type`、`terrain_manipulator`、`levels_per_mesh`、`ai_nationalization_desire`、`buildable`、`expandable`、`downsizeable`、`aliases` |
+| 經濟與員工 | `can_switch_owner`、`min_raise_to_hire`、`slaves_role`、`economic_contribution`、`residence_points_per_level`、`generates_residences`、`category_building_type`、`valid_pop_culture_traits`、`investment_scores`（腳本） |
+| 特殊建築 | `unique`、`has_max_level`、`ignore_stateregion_max_level`、`port`、`naval`、`recruits_combat_units`、`recruits_sailors`、`company_headquarter`、`statue`、`enable_air_connection`、`strait`、`lens` |
+| 地圖與模型 | `locator`、`entity_not_constructed`、`entity_under_construction`、`entity_constructed`（從已加載建築用過的模型選，或空白）、`city_gfx_interactions`（大小＋清除範圍）、`meshes`（腳本） |
+| 建造條件 | `can_build_government`、`can_build_private`（條件清單，州範圍）、`can_have_country_monopoly`（條件清單，國家範圍）、`should_auto_expand`（條件清單，認不出的條件以腳本列保留）、`construction_modifier`（腳本） |
+
+生產方式組：`ai_selection`、`is_hidden_when_unavailable`。
+
+生產方式：常用 `required_input_goods`、`disallowing_laws`、`is_hidden_when_unavailable`；「解鎖與限制」`unlocking_production_methods`、`unlocking_global_technologies`、`unlocking_principles`、`unlocking_identity`、`unlocking_company_categories`、`unlocking_geographic_regions`、`unlocking_religions`、`disallowing_religions`、`replacement_if_valid`；「AI 與其他」`profession_ratio`、`ai_weight`、`ai_value`、`scoring_override`、`pollution_generation`、`city_lights_color_index`、`timed_modifiers`（腳本）。
+
+- 控制項依欄位種類：勾選（只寫出和遊戲預設不同的值）、數字、下拉、文字、選一個或多個遊戲物件（科技、法律、商品、人口類型、宗教、原則、勢力集團身份、地理區域、運河、文化特徵、建造菜單分類等，選項從已加載的資料讀取）、條件清單、數值列（職業比例）、腳本框。
+- 欄位清單來自原版 1.15.1 實際用到的欄位，加上 `buildings.md`、`production_methods.md` 有記載的欄位。說明檔記載但已過時的欄位不列：`can_build`（遊戲不使用）、`construction_points`（改用 `required_construction`）、`owners`、`ai_privatization_desire`、`production_methods`。
+- 會讓生產建築無法使用、或變成別種建築的欄位，上方一直顯示黃字警告（不彈窗）；設成有問題的值時，警告前加上 ⚠、文字加粗，欄位加上黃框。新工廠和覆蓋現有建築都一樣顯示。有警告的欄位：`ownership_type`（不是 self 時）、`terrain_manipulator`（`urban_*`）、`buildable`／`expandable`（取消時）、`aliases`、`locator`、`strait`（有值時）、`unique`、`has_max_level`、`port`、`naval`、`recruits_combat_units`、`recruits_sailors`、`company_headquarter`、`statue`（勾選時）、`entity_not_constructed`、`entity_constructed`（有設定時）。
 
 ### 3.3 編輯區：生產方式組
 
@@ -144,7 +151,7 @@ pm_bakery = {
 | 僱用 | 人口類型＋每級人數 | `building_modifiers.level_scaled.building_employment_<人口>_add` |
 | 解鎖科技、解鎖法律 | 可多選 | `unlocking_technologies`、`unlocking_laws` |
 | 其他加成 | buff / debuff＋數值＋套用對象（建築、州、國家）與比例方式（依僱用、依等級、不縮放） | `building_modifiers`／`state_modifiers`／`country_modifiers` 的 `workforce_scaled`／`level_scaled`／`unscaled` |
-| 進階 | 其他欄位的腳本（例如 `pollution_generation`、`ai_weight`、`unlocking_production_methods`） | 原樣 |
+| 其他欄位 | 表單，見 3.2.1；工具不認得的欄位用腳本 | 原樣 |
 
 ### 3.4 利潤試算
 

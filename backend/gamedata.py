@@ -30,6 +30,15 @@ PM_ICON_DIR = "gfx/interface/icons/production_method_icons"
 PMG_ICON_DIR = "gfx/interface/icons/generic_icons"
 # Building groups a factory can be put in: these and the groups below them.
 PRODUCTION_GROUPS = ("bg_manufacturing", "bg_agriculture", "bg_ranching", "bg_plantations", "bg_extraction")
+# Game objects only picked by key in the forms: payload name -> folder.
+KEY_LISTS = {
+    "principles": "common/power_bloc_principles",
+    "identities": "common/power_bloc_identities",
+    "geographic_regions": "common/geographic_regions",
+    "religions": "common/religions",
+    "straits": "common/strait_definitions",
+    "culture_traits": "common/discrimination_traits",
+}
 BASE_CATEGORIES = ("aristocrat_owned", "bureaucrat_owned", "shopkeeper_owned", "academic_owned")
 
 
@@ -207,6 +216,7 @@ class GameData:
             self.dlc_features.update(_DLC_FEATURE.findall(block.text[block.start:block.end]))
 
     def _load_buildings(self):
+        self.lenses = set()  # sections of the build menu
         self.building_groups = {}
         self.group_info = {}
         for key, (block, _source, _file) in self.load_db("common/building_groups").items():
@@ -215,6 +225,9 @@ class GameData:
             self.group_info[key] = {name: block.get(name) == "yes"
                                     for name in ("always_possible", "is_subsistence", "capped_by_resources")}
             self.group_info[key]["rural"] = block.get("land_usage") == "rural"
+            lens = block.get("lens")
+            if isinstance(lens, str):
+                self.lenses.add(lens)
         self.buildings = {}
         self.factories = {}  # every building, in the factory builder's model
         origins = {}
@@ -311,6 +324,13 @@ class GameData:
             self.technologies[key] = {"icon": texture if isinstance(texture, str) else "",
                                       "era": int(era_number) if era_number.isdigit() else 0}
         self.cultures = list(self.load_db("common/cultures"))
+        self.key_lists = {name: list(self.load_db(folder)) for name, folder in KEY_LISTS.items()}
+        for factory in self.factories.values():
+            lens = next((e.value for e in pdx_script.parse(factory["extra"]).entries
+                         if e.key == "lens" and isinstance(e.value, str)), None)
+            if lens:
+                self.lenses.add(lens)
+        self.key_lists["lenses"] = sorted(self.lenses)
 
     def _load_textures(self):
         suffixes = (".dds", ".png")  # some mods ship .png icons
@@ -423,6 +443,7 @@ class GameData:
             "technologies": [{"key": key, "name": loc.name(key), "icon": tech["icon"], "era": tech["era"]}
                              for key, tech in self.technologies.items()],
             "cultures": [{"key": key, "name": loc.name(key)} for key in self.cultures],
+            **{name: [{"key": key, "name": loc.name(key)} for key in keys] for name, keys in self.key_lists.items()},
             "dlc_features": sorted(self.dlc_features),
             "categories": [{"key": c, "name": loc.name(f"company_category_{c}")} for c in categories],
             "default_category_name": loc.name("company_category_capitalist_owned"),

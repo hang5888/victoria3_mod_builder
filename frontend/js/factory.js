@@ -10,8 +10,9 @@ import { store, refreshState, loadData, language, languageName, nameOf, factoryN
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
 import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
 import { thumb, objectIcon, pickerIcon } from './icons.js';
-import { bracesBalanced, scriptValue, setScriptValue } from './script.js';
-import { STATE_KINDS, conditionEditor, clearConditionCache, countConditions, valueButton } from './conditions.js';
+import { bracesBalanced } from './script.js';
+import { scriptFields, splitScript, joinScript, usedValues } from './scriptfields.js';
+import { COUNTRY_KINDS, STATE_KINDS, conditionEditor, clearConditionCache, countConditions, valueButton } from './conditions.js';
 import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, pickerItems, imageField,
   scriptArea as scriptBox } from './widgets.js';
 
@@ -743,10 +744,12 @@ function pmgCard(entry, index) {
     h('div', { class: 'row' },
       h('button', { class: 'btn', onclick: () => { entry.pms.push(newPm()); restructured(); } }, t('factory.add_pm')),
       h('button', { class: 'btn', onclick: () => addRefPms(entry) }, t('factory.add_pm_ref'))),
-    h('details', { class: 'cond-script', open: Boolean(entry.extra.trim()) },
+    scriptFields({ scope: 'pmg', fields: PMG_SCRIPT_FIELDS, get: () => entry.extra,
+      write: (text) => { entry.extra = text; restructured(); } }),
+    h('details', { class: 'cond-script', open: hasUnknown(entry, PMG_KEYS) },
       h('summary', {}, t('factory.other_script')),
       h('p', { class: 'muted small' }, t('factory.pmg_extra_hint')),
-      scriptArea(() => entry.extra, (value) => { entry.extra = value; })));
+      unknownBox(entry, PMG_KEYS, restructured)));
 }
 
 function addRefPms(pmg) {
@@ -895,10 +898,12 @@ function pmEditor(pmg, pm, index) {
     keyChips({ keys: pm.unlocking_laws, kind: 'laws', label: t('factory.laws'),
       onChange: (keys) => { pm.unlocking_laws = keys; restructured(); } }),
     modifierRows(pm, touch),
-    h('details', { class: 'cond-script', open: Boolean(pm.extra.trim()) },
+    scriptFields({ scope: 'pm', fields: PM_SCRIPT_FIELDS, groups: PM_GROUPS, get: () => pm.extra,
+      write: (text, redraw) => { pm.extra = text; if (redraw) restructured(); else touch(); } }),
+    h('details', { class: 'cond-script', open: hasUnknown(pm, PM_KEYS) },
       h('summary', {}, t('factory.other_script')),
       h('p', { class: 'muted small' }, t('factory.pm_extra_hint')),
-      scriptArea(() => pm.extra, (value) => { pm.extra = value; })),
+      unknownBox(pm, PM_KEYS, restructured)),
     h('div', { class: 'row pm-actions' }, moveButtons(pmg.pms, index),
       h('button', { class: 'btn danger', onclick: () => { pmg.pms.splice(index, 1); restructured(); } },
         t('factory.remove_pm'))));
@@ -942,136 +947,156 @@ function aiSection() {
       scriptArea(() => factory.ai_value, (value) => { factory.ai_value = value; })]);
 }
 
-// ------------------------------------------------------- building settings
+// ------------------------------------------------------- script fields
 //
-// Fields of the building that are often changed, as form controls. They live in the other
-// script (`editing.extra`): the controls read it and write single lines of it, so the two
-// always agree and anything else in the script is kept.
+// The fields of a building, group or method that have no editor of their own above are kept
+// in its other script (`extra`). The known ones are edited as form controls (scriptfields.js);
+// the text box only shows what the tool does not know, for example fields added by mods.
 
-// On/off fields and what the game does when they are not written.
-const FLAGS = [['buildable', true], ['expandable', true], ['downsizeable', true], ['unique', false],
-  ['has_max_level', false], ['port', false], ['naval', false], ['recruits_combat_units', false],
-  ['recruits_sailors', false]];
-const NUMBERS = ['levels_per_mesh', 'ai_nationalization_desire', 'residence_points_per_level'];
+const yes = (value) => value === 'yes';
+const no = (value) => value === 'no';
+const given = (value) => (Array.isArray(value) ? value.length > 0 : Boolean(value));
 const OWNERSHIP = ['self', 'other', 'no_ownership'];
-let settingsTimer = null;
+const flag = (key, fallback, more = {}) => ({ key, kind: 'flag', default: fallback, ...more });
+const buildingTexts = () => store.data.factories.map((factory) => factory.extra);
+const entities = () => usedValues(buildingTexts(), 'entity_constructed')
+  .concat(usedValues(buildingTexts(), 'entity_not_constructed'), usedValues(buildingTexts(), 'entity_under_construction'))
+  .filter((value, i, all) => all.indexOf(value) === i).sort();
 
-// Fields that can make a production building unusable or turn it into another kind of
-// building: each always has a yellow warning above it, and is marked while it is set to
-// the risky value (risky(value) is true).
-const WARNED = {
-  ownership_type: (value) => value !== 'self',
-  terrain_manipulator: (value) => typeof value === 'string' && value.startsWith('urban_'),
-  buildable: (value) => value === 'no',
-  expandable: (value) => value === 'no',
-  unique: (value) => value === 'yes',
-  has_max_level: (value) => value === 'yes',
-  port: (value) => value === 'yes',
-  naval: (value) => value === 'yes',
-  recruits_combat_units: (value) => value === 'yes',
-  recruits_sailors: (value) => value === 'yes',
-  aliases: (value) => Array.isArray(value) && value.length > 0,
-  locator: (value) => Boolean(value),
-};
+const BUILDING_GROUPS = ['economy', 'special', 'map', 'conditions'];
+const BUILDING_SCRIPT_FIELDS = [
+  { key: 'ownership_type', kind: 'select', options: OWNERSHIP, hint: true, risky: (value) => value !== 'self',
+    label: (option) => (OWNERSHIP.includes(option) ? `${t('fset.ownership.' + option)} (${option})` : option) },
+  { key: 'terrain_manipulator', kind: 'select', options: () => usedValues(buildingTexts(), 'terrain_manipulator'), hint: true,
+    risky: (value) => typeof value === 'string' && value.startsWith('urban_') },
+  { key: 'levels_per_mesh', kind: 'number', hint: true },
+  { key: 'ai_nationalization_desire', kind: 'number', hint: true },
+  flag('buildable', true, { risky: no }),
+  flag('expandable', true, { risky: no }),
+  flag('downsizeable', true),
+  { key: 'aliases', kind: 'keys', hint: true, risky: given },
 
-function settingWarning(key) {
-  return t('fset.warn.' + key);
-}
+  flag('can_switch_owner', true, { group: 'economy', hint: true }),
+  { key: 'min_raise_to_hire', group: 'economy', kind: 'number', hint: true },
+  { key: 'slaves_role', group: 'economy', kind: 'key', pick: 'pop_types', hint: true },
+  { key: 'economic_contribution', group: 'economy', kind: 'number', hint: true },
+  { key: 'residence_points_per_level', group: 'economy', kind: 'number', hint: true },
+  flag('generates_residences', true, { group: 'economy', hint: true }),
+  { key: 'category_building_type', group: 'economy', kind: 'key', pick: 'buildings', hint: true },
+  { key: 'valid_pop_culture_traits', group: 'economy', kind: 'keys', pick: 'culture_traits', hint: true },
+  { key: 'investment_scores', group: 'economy', kind: 'block', hint: true },
 
-function setSetting(key, line) {
-  editing.extra = setScriptValue(editing.extra, key, line);
-  changed();
-  refresh('settings');
-  refresh('advanced');
-}
+  flag('unique', false, { group: 'special', risky: yes }),
+  flag('has_max_level', false, { group: 'special', risky: yes }),
+  flag('ignore_stateregion_max_level', false, { group: 'special', hint: true }),
+  flag('port', false, { group: 'special', risky: yes }),
+  flag('naval', false, { group: 'special', risky: yes }),
+  flag('recruits_combat_units', false, { group: 'special', risky: yes }),
+  flag('recruits_sailors', false, { group: 'special', risky: yes }),
+  flag('company_headquarter', false, { group: 'special', risky: yes }),
+  flag('statue', false, { group: 'special', risky: yes }),
+  flag('enable_air_connection', false, { group: 'special', hint: true }),
+  { key: 'strait', group: 'special', kind: 'key', pick: 'straits', risky: given },
+  { key: 'lens', group: 'special', kind: 'key', pick: 'lenses', hint: true },
 
-// Values of terrain_manipulator the loaded buildings use.
-function terrainOptions() {
-  const values = new Set();
-  for (const factory of store.data.factories) {
-    const value = scriptValue(factory.extra, 'terrain_manipulator');
-    if (typeof value === 'string') values.add(value);
+  { key: 'locator', group: 'map', kind: 'text', hint: true, risky: given },
+  { key: 'entity_not_constructed', group: 'map', kind: 'entity', options: entities, risky: (value) => value !== null },
+  { key: 'entity_under_construction', group: 'map', kind: 'entity', options: entities, hint: true },
+  { key: 'entity_constructed', group: 'map', kind: 'entity', options: entities, risky: (value) => value !== null },
+  { key: 'city_gfx_interactions', group: 'map', kind: 'gfx', hint: true },
+  { key: 'meshes', group: 'map', kind: 'block', hint: true },
+
+  { key: 'can_build_government', group: 'conditions', kind: 'conditions', kinds: STATE_KINDS, hint: true },
+  { key: 'can_build_private', group: 'conditions', kind: 'conditions', kinds: STATE_KINDS, hint: true },
+  { key: 'can_have_country_monopoly', group: 'conditions', kind: 'conditions', kinds: COUNTRY_KINDS, hint: true },
+  { key: 'should_auto_expand', group: 'conditions', kind: 'conditions', kinds: [], hint: true },
+  { key: 'construction_modifier', group: 'conditions', kind: 'block', hint: true },
+];
+
+const PMG_SCRIPT_FIELDS = [
+  { key: 'ai_selection', kind: 'select', options: ['most_profitable', 'most_productive'], hint: true },
+  flag('is_hidden_when_unavailable', false, { hint: true }),
+];
+
+const PM_GROUPS = ['unlock', 'other'];
+const PM_SCRIPT_FIELDS = [
+  { key: 'required_input_goods', kind: 'repeat', pick: 'goods', hint: true },
+  { key: 'disallowing_laws', kind: 'keys', pick: 'laws' },
+  flag('is_hidden_when_unavailable', false, { hint: true }),
+
+  { key: 'unlocking_production_methods', group: 'unlock', kind: 'keys', pick: 'pms', hint: true },
+  { key: 'unlocking_global_technologies', group: 'unlock', kind: 'keys', pick: 'technologies', hint: true },
+  { key: 'unlocking_principles', group: 'unlock', kind: 'keys', pick: 'principles' },
+  { key: 'unlocking_identity', group: 'unlock', kind: 'repeat', pick: 'identities', hint: true },
+  { key: 'unlocking_company_categories', group: 'unlock', kind: 'keys', pick: 'categories' },
+  { key: 'unlocking_geographic_regions', group: 'unlock', kind: 'keys', pick: 'geographic_regions' },
+  { key: 'unlocking_religions', group: 'unlock', kind: 'keys', pick: 'religions' },
+  { key: 'disallowing_religions', group: 'unlock', kind: 'keys', pick: 'religions' },
+  { key: 'replacement_if_valid', group: 'unlock', kind: 'key', pick: 'pms', hint: true },
+
+  { key: 'profession_ratio', group: 'other', kind: 'amounts', pick: 'pop_types', hint: true },
+  { key: 'ai_weight', group: 'other', kind: 'number', hint: true },
+  { key: 'ai_value', group: 'other', kind: 'number', hint: true },
+  { key: 'scoring_override', group: 'other', kind: 'select', hint: true,
+    options: () => usedValues(store.data.pms.map((pm) => pm.extra), 'scoring_override') },
+  { key: 'pollution_generation', group: 'other', kind: 'number', hint: true },
+  { key: 'city_lights_color_index', group: 'other', kind: 'number', hint: true },
+  { key: 'timed_modifiers', group: 'other', kind: 'block', hint: true },
+];
+
+const keysOf = (fields) => new Set(fields.map((field) => field.key));
+const BUILDING_KEYS = keysOf(BUILDING_SCRIPT_FIELDS);
+const PMG_KEYS = keysOf(PMG_SCRIPT_FIELDS);
+const PM_KEYS = keysOf(PM_SCRIPT_FIELDS);
+
+// What the form does not know of an item's other script, as a text box. `redraw` runs when
+// the box loses the focus after a change, so fields typed into it move to the form.
+function unknownBox(item, keys, redraw) {
+  const parts = splitScript(item.extra, keys);
+  if (!parts) {
+    // the braces do not match: edit the whole script until they do
+    const area = scriptArea(() => item.extra, (value) => { item.extra = value; });
+    area.addEventListener('change', redraw);
+    return area;
   }
-  return [...values].sort();
+  let { known } = parts;
+  let last = item.extra;
+  const area = scriptArea(() => parts.unknown, (typed) => {
+    if (item.extra !== last) {  // the form changed it meanwhile
+      const now = splitScript(item.extra, keys);
+      if (now) known = now.known;
+    }
+    item.extra = last = joinScript(known, typed);
+  });
+  area.addEventListener('change', redraw);
+  return area;
 }
 
-function settingField(key, control, value, hint) {
-  const risky = key in WARNED && WARNED[key](value);
-  return h('div', { class: 'setting' + (risky ? ' warned' : '') },
-    key in WARNED && h('div', { class: 'setting-warn' }, risky && '⚠ ', settingWarning(key)),
-    h('label', { class: 'field' },
-      h('span', { class: 'field-label' }, t('fset.label.' + key), h('span', { class: 'mono muted small' }, ` ${key}`)),
-      control,
-      hint && h('span', { class: 'muted small' }, hint)));
+function hasUnknown(item, keys) {
+  const parts = splitScript(item.extra, keys);
+  return !parts || Boolean(parts.unknown.trim());
 }
 
 function settingsSection() {
-  const text = editing.extra;
-  if (scriptValue(text, 'ownership_type') === undefined) {
-    return section(t('fset.title'), null, h('p', { class: 'notice warn' }, t('fset.unreadable')));
-  }
-  const value = (key) => scriptValue(text, key);
-  const select = (key, options, label) => {
-    const current = value(key) || '';
-    const el = h('select', { class: 'input', onchange: () => setSetting(key, el.value ? `${key} = ${el.value}` : null) },
-      h('option', { value: '' }, t('fset.unset')),
-      [...new Set([...options, current].filter(Boolean))].map((option) => h('option', { value: option }, label(option))));
-    el.value = current;
-    return settingField(key, el, value(key), t('fset.hint.' + key));
-  };
-  const number = (key) => {
-    const current = value(key);
-    const el = h('input', {
-      class: 'input level', type: 'number', step: 'any', value: typeof current === 'string' ? current : '',
-      placeholder: t('fset.unset'),
-      onchange: () => setSetting(key, el.value.trim() ? `${key} = ${el.value.trim()}` : null),
-    });
-    return settingField(key, el, current, t('fset.hint.' + key));
-  };
-  const text_ = (key, quote) => {
-    const current = value(key);
-    const shown = Array.isArray(current) ? current.join(' ') : current || '';
-    const el = h('input', {
-      class: 'input mono', type: 'text', spellcheck: false, value: shown,
-      onchange: () => {
-        const typed = el.value.trim();
-        if (!typed) return setSetting(key, null);
-        return setSetting(key, quote ? `${key} = "${typed.replace(/"/g, '')}"` : `${key} = { ${typed.split(/\s+/).join(' ')} }`);
-      },
-    });
-    return settingField(key, el, current, t('fset.hint.' + key));
-  };
-  const flag = (key, fallback) => {
-    const current = value(key);
-    const on = current === null ? fallback : current === 'yes';
-    const el = h('label', { class: 'check' },
-      h('input', { type: 'checkbox', checked: on,
-        // only what differs from the game's default is written
-        onchange: (event) => setSetting(key, event.target.checked === fallback ? null : `${key} = ${event.target.checked ? 'yes' : 'no'}`) }),
-      fallback ? t('fset.default_yes') : t('fset.default_no'));
-    return settingField(key, el, current);
-  };
-  return section(t('fset.title'), t('fset.hint'),
-    h('div', { class: 'settings-grid' },
-      select('ownership_type', OWNERSHIP, (option) => (OWNERSHIP.includes(option) ? `${t('fset.ownership.' + option)} (${option})` : option)),
-      select('terrain_manipulator', terrainOptions(), (option) => option),
-      NUMBERS.map(number)),
-    h('div', { class: 'settings-grid flags' }, FLAGS.map(([key, fallback]) => flag(key, fallback))),
-    h('div', { class: 'settings-grid' }, text_('aliases', false), text_('locator', true)));
+  return section(t('fset.title'), t('fset.hint'), scriptFields({
+    scope: 'building', fields: BUILDING_SCRIPT_FIELDS, groups: BUILDING_GROUPS,
+    get: () => editing.extra,
+    write: (text, redraw) => {
+      editing.extra = text;
+      changed();
+      if (redraw) refresh('settings');
+      refresh('advanced');
+    },
+  }));
 }
 
 function advancedSection() {
-  const factory = editing;
+  const redraw = () => { refresh('settings'); refresh('advanced'); };
   return section(t('company.advanced'), null,
     h('div', { class: 'script-field' },
       h('span', { class: 'field-label' }, t('factory.other_script')),
       h('p', { class: 'muted small' }, t('factory.extra_hint')),
-      scriptArea(() => factory.extra, (value) => {
-        factory.extra = value;
-        // follow the typing in the settings above, without taking the focus away
-        clearTimeout(settingsTimer);
-        settingsTimer = setTimeout(() => { if (editing === factory) refresh('settings'); }, 300);
-      })));
+      unknownBox(editing, BUILDING_KEYS, redraw)));
 }
 
 const builders = {

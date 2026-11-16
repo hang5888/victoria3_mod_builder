@@ -556,6 +556,15 @@ textarea.script.invalid { border-color: var(--bad); }
 .estimate-group { display: flex; flex-direction: column; }
 .estimate-group select { width: 100%; }
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px 16px; align-items: start; }
+.setting.wide { grid-column: 1 / -1; }
+.script-fields { display: flex; flex-direction: column; gap: 10px; }
+.settings-group { border-top: 1px solid var(--panel-2); padding-top: 6px; }
+.settings-group > summary { cursor: pointer; font-weight: 600; font-size: 13px; padding: 2px 0; display: flex; align-items: center; gap: 8px; list-style: none; }
+.settings-group > summary::-webkit-details-marker { display: none; }
+.settings-group > summary::before { content: "▸"; width: 12px; color: var(--muted); }
+.settings-group[open] > summary::before { content: "▾"; }
+.settings-group[open] > summary { margin-bottom: 8px; }
+.pm-card .script-fields, .pmg-card .script-fields { padding: 8px 0; border-top: 1px solid var(--line); }
 .settings-grid.flags { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); padding: 10px 0; border-top: 1px solid var(--panel-2); border-bottom: 1px solid var(--panel-2); }
 .setting { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .setting.warned .input, .setting.warned .check { outline: 1px solid var(--warn); outline-offset: 2px; border-radius: var(--radius); }

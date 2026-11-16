@@ -30,7 +30,8 @@ export function languageName(key) {
 }
 
 const INDEXED = ['companies', 'buildings', 'modifiers', 'states', 'regions', 'countries', 'prestige_goods', 'categories',
-  'technologies', 'cultures', 'factories', 'building_groups', 'pmgs', 'pms', 'goods', 'pop_types', 'laws'];
+  'technologies', 'cultures', 'factories', 'building_groups', 'pmgs', 'pms', 'goods', 'pop_types', 'laws',
+  'principles', 'identities', 'geographic_regions', 'religions', 'straits', 'culture_traits', 'lenses'];
 
 // Game data for the current language, or null when nothing is loaded yet.
 export async function loadData() {
