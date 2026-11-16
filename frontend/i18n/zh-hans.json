@@ -367,7 +367,7 @@
   "factory.estimate_output": "产出价值",
   "factory.estimate_profit": "利润",
   "factory.estimate_jobs": "雇用人数",
-  "factory.estimate_hint": "按商品基础价格计算，不含市场价格变动、工资和税。",
+  "factory.estimate_hint": "按商品基础价格计算，不含市场价格变动。工资是估算：工人（工资权重 1）扣掉 10% 税后，刚好买得起所选生活水平的需求，每名工人养活 {people} 人（含自己和受扶养人口）；其他职业按工资权重领取。游戏里每座建筑会按盈亏自动加薪或减薪。",
   "fblock.potential": "建筑可以出现在哪些地区。留空表示所有地区。",
   "fblock.possible": "这些也满足时才可以建造。留空表示随时可以。",
   "fblock.title.potential": "可出现条件",
@@ -557,5 +557,11 @@
   "fset.label.city_gfx_interactions": "城市图像",
   "fset.hint.city_gfx_interactions": "在城市图像中占多大范围，以及是否清掉该范围内的其他建筑。",
   "fset.label.meshes": "地图模型",
-  "fset.hint.meshes": "放在地形上的模型，以脚本编辑。"
+  "fset.hint.meshes": "放在地形上的模型，以脚本编辑。",
+  "factory.estimate_wage_weight": "工资权重（折合工人数）",
+  "factory.estimate_sol": "工人生活水平",
+  "factory.estimate_wage_rate": "工资率（每万名工人每周）",
+  "factory.estimate_wages": "工资",
+  "factory.estimate_after_wages": "扣除工资后的利润",
+  "factory.after_wages_short": "扣除工资后（生活水平 {level}）"
 }

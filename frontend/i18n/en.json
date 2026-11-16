@@ -367,7 +367,7 @@
   "factory.estimate_output": "Output value",
   "factory.estimate_profit": "Profit",
   "factory.estimate_jobs": "Employees",
-  "factory.estimate_hint": "At base prices; market prices, wages and taxes are not included.",
+  "factory.estimate_hint": "At base prices, without market price changes. Wages are an estimate: laborers (wage weight 1) earn just enough, after 10% tax, to buy the needs of the chosen standard of living for {people} people (themselves and their dependents); other jobs get their wage weight times that. In the game, each building raises and lowers its wages with its profits.",
   "fblock.potential": "Where the building can appear at all. Empty means everywhere.",
   "fblock.possible": "Must also hold before it can be built. Empty means always.",
   "fblock.title.potential": "Can appear",
@@ -557,5 +557,11 @@
   "fset.label.city_gfx_interactions": "City graphics",
   "fset.hint.city_gfx_interactions": "How much room it takes in the city picture, and whether other buildings there are cleared.",
   "fset.label.meshes": "Map models",
-  "fset.hint.meshes": "Models placed on the terrain. Script."
+  "fset.hint.meshes": "Models placed on the terrain. Script.",
+  "factory.estimate_wage_weight": "Wage weight (in laborers)",
+  "factory.estimate_sol": "Laborers' standard of living",
+  "factory.estimate_wage_rate": "Wage rate (10000 laborers a week)",
+  "factory.estimate_wages": "Wages",
+  "factory.estimate_after_wages": "Profit after wages",
+  "factory.after_wages_short": "after wages (standard of living {level})"
 }

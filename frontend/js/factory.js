@@ -206,12 +206,47 @@ function defaultPm(pmg) {
 
 // Value of a method per level at base prices (the same sums the game files note in comments).
 function pmValue(pm) {
-  if (!pm) return { input: 0, output: 0, profit: 0, jobs: 0 };
+  if (!pm) return { input: 0, output: 0, profit: 0, jobs: 0, wageWeight: 0 };
   const cost = (good) => (store.index.goods.get(good) || { cost: 0 }).cost;
   const input = sum(pm.inputs, (row) => number(row.amount) * cost(row.good));
   const output = sum(pm.outputs, (row) => number(row.amount) * cost(row.good));
-  return { input, output, profit: output - input, jobs: sum(pm.employment, (row) => number(row.amount)) };
+  return { input, output, profit: output - input, jobs: sum(pm.employment, (row) => number(row.amount)),
+    wageWeight: sum(pm.employment, (row) => number(row.amount) * wageWeightOf(row.pop)) };
 }
+
+// The wage estimate. Laborers (wage weight 1) are paid so that, after WAGE_TAX, they just afford the needs of
+// the chosen standard of living for themselves and their dependents; every other job gets its wage weight times
+// that, as in the game. The needs are the game's buy packages: £ at base prices per 10000 people a week.
+const WAGE_TAX = 0.1;
+let wageLevel = 10;  // the standard of living the estimate pays laborers for
+
+function wageWeightOf(pop) {
+  const type = store.index.pop_types.get(pop);
+  return type && Number.isFinite(type.wage_weight) ? type.wage_weight : 1;
+}
+
+// People one worker keeps, themselves included (4 when a quarter of the people work).
+function peoplePerWorker() {
+  const laborers = store.index.pop_types.get('laborers');
+  const ratio = (laborers && laborers.working_adult_ratio) || store.data.working_adult_ratio || 0.25;
+  return 1 / ratio;
+}
+
+const wageLevels = () => new Map(store.data.buy_packages || []);
+
+// Weekly pay of 10000 laborers, or null when the game has no needs for the level.
+function wageRate(level) {
+  const cost = wageLevels().get(level);
+  return cost == null ? null : (cost * peoplePerWorker()) / (1 - WAGE_TAX);
+}
+
+const wagesOf = (wageWeight) => {
+  const rate = wageRate(wageLevel);
+  return rate == null ? null : (rate * wageWeight) / 10000;
+};
+
+const signed = (value) => (value > 0 ? '+' : '') + round(value);
+const tone = (value) => (value > 0 ? 'good' : value < 0 ? 'bad' : '');
 
 function goodsAmounts(rows) {
   return rows.map((row) => h('span', { class: 'flow-good', title: nameOf('goods', row.good) },
@@ -484,7 +519,7 @@ function pickedPms(factory) {
 
 function estimate(factory) {
   const picked = pickedPms(factory);
-  const totals = { input: 0, output: 0, profit: 0, jobs: 0 };
+  const totals = { input: 0, output: 0, profit: 0, jobs: 0, wageWeight: 0 };
   const goods = { inputs: new Map(), outputs: new Map() };
   for (const entry of picked) {
     const pm = entry && pmOf(entry);
@@ -515,10 +550,49 @@ function estimate(factory) {
     h('div', { class: 'pm-flow' }, goodsAmounts(rows('inputs')), h('span', { class: 'muted' }, '→'), goodsAmounts(rows('outputs'))),
     line(t('factory.estimate_input'), round(totals.input)),
     line(t('factory.estimate_output'), round(totals.output)),
-    line(t('factory.estimate_profit'), (totals.profit > 0 ? '+' : '') + round(totals.profit),
-      totals.profit > 0 ? 'good' : totals.profit < 0 ? 'bad' : ''),
+    line(t('factory.estimate_profit'), signed(totals.profit), tone(totals.profit)),
     line(t('factory.estimate_jobs'), round(totals.jobs)),
-    h('p', { class: 'muted small' }, t('factory.estimate_hint')));
+    wageLines(totals),
+    h('p', { class: 'muted small' }, t('factory.estimate_hint', { people: round(peoplePerWorker()) })));
+}
+
+// Wages at the chosen standard of living, and the profit after them. Typing a level updates the numbers in
+// place, so the field keeps its focus.
+function wageLines(totals) {
+  const levels = [...wageLevels().keys()];
+  if (!levels.length) return null;
+  const rate = h('b', {});
+  const wages = h('b', {});
+  const after = h('b', {});
+  const update = () => {
+    const pay = wagesOf(totals.wageWeight);
+    const left = pay == null ? null : Math.round(totals.profit - pay);
+    rate.textContent = String(Math.round(wageRate(wageLevel) || 0));
+    wages.textContent = pay == null ? '—' : String(Math.round(pay));
+    after.textContent = left == null ? '—' : signed(left);
+    after.className = left == null ? '' : tone(left);
+  };
+  const input = h('input', {
+    class: 'input mono level-input', type: 'number', min: String(Math.min(...levels)), max: String(Math.max(...levels)),
+    step: '1', value: String(wageLevel),
+    oninput: () => {
+      const level = Number(input.value);
+      const valid = Number.isInteger(level) && wageLevels().has(level);
+      input.classList.toggle('invalid', !valid);
+      if (valid) {
+        wageLevel = level;
+        update();
+      }
+    },
+  });
+  update();
+  const line = (label, value) => h('div', { class: 'estimate-line' }, h('span', { class: 'muted' }, label), value);
+  return h('div', { class: 'estimate-wages' },
+    line(t('factory.estimate_wage_weight'), h('b', {}, round(totals.wageWeight))),
+    line(t('factory.estimate_sol'), input),
+    line(t('factory.estimate_wage_rate'), rate),
+    line(t('factory.estimate_wages'), wages),
+    line(t('factory.estimate_after_wages'), after));
 }
 
 function costText(value) {
@@ -1327,6 +1401,8 @@ function factoryDetails(factory) {
   const shown = shownVersion(factory);
   const picked = pickedPms(shown).map((entry) => entry && pmOf(entry)).filter(Boolean);
   const profit = sum(picked, (pm) => pmValue(pm).profit);
+  const pay = wagesOf(sum(picked, (pm) => pmValue(pm).wageWeight));
+  const afterWages = pay == null ? null : Math.round(profit - pay);
   const monument = isMonumentPage();
   return h('div', { class: 'company-details' },
     factory.sources.length > 1 && versionPicker(factory),
@@ -1344,7 +1420,9 @@ function factoryDetails(factory) {
         pmg ? pmg.pms.map((pm) => entryName('pms', pm)).join(', ') : t('factory.missing', { key: entry.key }));
     }),
     !monument && picked.length > 0 && h('div', {}, h('span', { class: 'muted' }, `${t('factory.estimate_profit')}: `),
-      h('b', { class: profit > 0 ? 'good' : profit < 0 ? 'bad' : '' }, (profit > 0 ? '+' : '') + round(profit))),
+      h('b', { class: tone(profit) }, signed(profit)),
+      afterWages != null && [h('span', { class: 'muted' }, ` · ${t('factory.after_wages_short', { level: wageLevel })}: `),
+        h('b', { class: tone(afterWages) }, signed(afterWages))]),
     h('div', { class: 'muted small' }, `${sourceName(shown.source)} · ${shown.file}`),
     h('div', { class: 'row' },
       h('button', { class: 'btn', onclick: () => run(() => overrideFactory(shown)) }, t('company.override')),

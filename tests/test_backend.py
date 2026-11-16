@@ -431,6 +431,30 @@ class LoadDbTest(unittest.TestCase):
             self.assertEqual(origins["company_b"][1][1].get("x"), "y")
             self.assertEqual(origins["company_b"][1][2], "zz_mod1.txt")
 
+    def test_wage_basis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            files = {
+                "game/common/buy_packages/00_buy_packages.txt":
+                    "wealth_1 = { political_strength = 0.03 goods = { popneed_a = 23 popneed_b = 90 } }\n"
+                    "wealth_2 = { goods = { popneed_a = 27 popneed_b = 94.5 } }\nnot_a_level = { goods = { x = 1 } }\n",
+                "game/common/defines/00_defines.txt":
+                    "NGame = { WORKING_ADULT_RATIO_BASE = 9 }\nNPops = { WORKING_ADULT_RATIO_BASE = 0.25 OTHER = 1 }\n",
+                # a mod changing one define keeps the others; a later block without the setting changes nothing
+                "mod1/common/defines/zz_mod.txt": "NPops = { WORKING_ADULT_RATIO_BASE = 0.2 }\nNPops = { OTHER = 2 }\n",
+                # a mod adding a need to a level
+                "mod1/common/buy_packages/zz_mod.txt": "TRY_INJECT:wealth_2 = { goods = { popneed_c = 5 } }\n",
+            }
+            for rel, text in files.items():
+                path = Path(tmp) / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+            data = GameData.__new__(GameData)
+            data.fs = FileSystem([Source(name, name, Path(tmp) / name, "mod") for name in ("game", "mod1")])
+            data.warnings = []
+            data._load_wages()
+            self.assertEqual(data.buy_packages, {1: 113.0, 2: 126.5})
+            self.assertEqual(data.working_adult_ratio, 0.2)
+
 
 class ProjectTest(unittest.TestCase):
     def setUp(self):

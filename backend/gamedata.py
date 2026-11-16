@@ -114,6 +114,14 @@ def read_text(path):
         return f.read()
 
 
+def _number(value, default):
+    """A script value as a number; `default` when it is missing or not a plain number."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def game_languages(game_dir):
     """Languages the game ships with, as [{key, name}], read from its localization folder."""
     base = Path(game_dir) / "localization"
@@ -255,7 +263,9 @@ class GameData:
         self.pop_types = {}
         for key, (block, _source, _file) in self.load_db("common/pop_types").items():
             texture = block.get("texture")
-            self.pop_types[key] = {"icon": texture if isinstance(texture, str) else ""}
+            self.pop_types[key] = {"icon": texture if isinstance(texture, str) else "",
+                                   "wage_weight": _number(block.get("wage_weight"), 1.0),
+                                   "working_adult_ratio": _number(block.get("working_adult_ratio"), None)}
         self.laws = {}
         for key, (block, _source, _file) in self.load_db("common/laws").items():
             group = block.get("group")
@@ -331,7 +341,30 @@ class GameData:
             if lens:
                 self.lenses.add(lens)
         self.key_lists["lenses"] = sorted(self.lenses)
+        self._load_wages()
         self._load_map_objects()
+
+    def _load_wages(self):
+        """What the factory estimate prices wages with: the cost of each wealth level's needs (the buy
+        packages: £ at base prices per 10000 people a week) and the base share of working adults."""
+        self.buy_packages = {}
+        for key, (block, _source, _file) in self.load_db("common/buy_packages").items():
+            level = key[len("wealth_"):] if key.startswith("wealth_") else ""
+            # mods add needs with TRY_INJECT:wealth_10 = { goods = { ... } }: a second goods block, added to the first
+            goods = [g for g in block.get_all("goods") if isinstance(g, Block)]
+            if level.isdigit() and goods:
+                self.buy_packages[int(level)] = sum(_number(e.value, 0.0) for g in goods for e in g.entries if e.key)
+        self.working_adult_ratio = 0.25
+        for source, path, rel_name in self.fs.list_files("common/defines", ".txt"):
+            try:
+                root = pdx_script.parse(read_text(path))
+            except (OSError, RecursionError) as error:
+                self.warnings.append(f"{source.name}: common/defines/{rel_name}: {error}")
+                continue
+            # mods change single defines, so the last value of the setting wins, not the last block
+            for block in root.get_all("NPops"):
+                if isinstance(block, Block):
+                    self.working_adult_ratio = _number(block.get("WORKING_ADULT_RATIO_BASE"), self.working_adult_ratio)
 
     def _load_map_objects(self):
         """Map positions of the locators buildings use (monuments), and who owns each state at the start."""
@@ -474,6 +507,8 @@ class GameData:
             "pms": [{**pm, "name": loc.name(key)} for key, pm in self.pms.items()],
             "goods": [{"key": key, "name": loc.name(key), **good} for key, good in self.goods.items()],
             "pop_types": [{"key": key, "name": loc.name(key), **pop} for key, pop in self.pop_types.items()],
+            "buy_packages": [[level, round(cost, 2)] for level, cost in sorted(self.buy_packages.items())],
+            "working_adult_ratio": self.working_adult_ratio,
             "laws": [{"key": key, "name": loc.name(key), "group_name": loc.name(law["group"]) if law["group"] else ""}
                      for key, law in self.laws.items()],
             "locators": [{"key": name, "x": x, "z": z} for name, (x, z) in self.locators.items()],
