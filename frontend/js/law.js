@@ -20,7 +20,7 @@ const RAW_BLOCKS = ['is_visible', 'can_enact', 'on_enact', 'on_activate', 'on_de
   'ai_impose_chance', 'ai_will_do', 'ai_enact_weight_modifier'];
 const LIST_FIELDS = ['unlocking_technologies', 'unlocking_laws', 'requires_law_or', 'disallowing_laws'];
 const FIELDS = ['key', 'mode', 'names', 'descs', 'group', 'icon', 'progressiveness', 'parent', 'institution',
-  ...LIST_FIELDS, 'modifiers', 'blocks', 'start', 'extra'];
+  ...LIST_FIELDS, 'modifiers', 'blocks', 'extra'];
 const SCRIPT_BLOCKS = ['on_enact', 'on_activate', 'on_deactivate'];
 const AI_BLOCKS = ['ai_enact_weight_modifier', 'ai_will_do', 'can_impose', 'ai_impose_chance'];
 const KEY_PATTERN = /^[A-Za-z0-9_.\-]+$/;
@@ -61,7 +61,6 @@ function blankLaw(group) {
     ...Object.fromEntries(LIST_FIELDS.map((name) => [name, []])),
     modifiers: Object.fromEntries(MODIFIER_FIELDS.map((name) => [name, []])),
     blocks: { ...Object.fromEntries(RAW_BLOCKS.map((name) => [name, ''])), ai_enact_weight_modifier: AI_PETITIONS },
-    start: { all: false, default: false },
     extra: '',
   };
 }
@@ -74,7 +73,6 @@ function modelOf(law) {
     ...blank, ...model, names: model.names || {}, descs: model.descs || {},
     modifiers: { ...blank.modifiers, ...model.modifiers },
     blocks: { ...Object.fromEntries(RAW_BLOCKS.map((name) => [name, ''])), ...model.blocks },
-    start: { ...blank.start, ...model.start },
   };
 }
 
@@ -155,11 +153,8 @@ function lawNameOf(key) {
 }
 const rowName = (row) => (row.mine ? lawName(row.mine) : row.game.name || row.game.key);
 
-// The law the game uses for countries whose history sets none: the mod's default law, else the
-// group's first law.
+// The law the game uses for countries whose history sets none: the group's first law.
 function defaultOf(group) {
-  const mine = projectLaws().find((law) => law.mode === 'new' && law.group === group && law.start.default);
-  if (mine) return mine.key;
   const first = store.data.laws.find((law) => law.group === group && law.default);
   return first ? first.key : '';
 }
@@ -239,10 +234,6 @@ function problems(law) {
   }
   for (const name of RAW_BLOCKS) if (!bracesBalanced(law.blocks[name])) found.push('braces:' + name);
   if (!bracesBalanced(law.extra)) found.push('braces:extra');
-  const sameGroup = others.filter((other) => other.group === law.group);
-  if (law.start.default && law.mode === 'override') found.push('default_override');
-  if (law.start.default && sameGroup.some((other) => other.start.default)) found.push('default_twice');
-  if (law.start.all && sameGroup.some((other) => other.start.all)) found.push('all_twice');
   return found;
 }
 
@@ -295,7 +286,6 @@ function copyRow(row) {
     ...source, mode: 'new', key, names: name ? { [lang]: name } : {}, descs: desc ? { [lang]: desc } : {},
     // the copy thinks like the copied law: it takes the stances the copied law has
     parent: source.parent || source.key,
-    start: { countries: [], all: false, default: false },
   }, null, true);
 }
 
@@ -486,8 +476,6 @@ function renderPreview() {
     ...groupLimits(group).map((item) => h('div', { title: item.title }, t('law.limit_group_line', { text: item.text }))),
     limit && h('div', { title: limit.title }, t('law.limit_law_line', { text: limit.text })),
   ].filter(Boolean);
-  const limited = limits.length > 0 || law.blocks.can_enact.trim();
-  if ((law.start.all || law.start.default) && limited) notes.push(t('law.note_start_conditions'));
   const category = group && store.index.law_categories.get(group.category);
   const counts = { good: 0, bad: 0, neutral: 0 };
   for (const { score } of stances(law)) counts[score > 0 ? 'good' : score < 0 ? 'bad' : 'neutral'] += 1;
@@ -496,10 +484,6 @@ function renderPreview() {
   const progression = [...others, { name: lawName(law), value: Number(law.progressiveness) || 0, current: true }]
     .sort((a, b) => a.value - b.value);
   const filled = store.state.languages.filter((l) => law.names[l.key]);
-  const startChips = [
-    law.start.all && h('span', { class: 'chip' }, t('law.start_all')),
-    law.start.default && h('span', { class: 'chip' }, t('law.start_default')),
-  ].filter(Boolean);
   const effects = MODIFIER_FIELDS.filter((name) => name !== 'institution_modifier' && law.modifiers[name].length);
   fill(els.preview,
     h('div', { class: 'law-preview-art' }, thumb(law.icon, 256, 'law-preview-icon')),
@@ -537,9 +521,6 @@ function renderPreview() {
         law.institution && [h('div', { class: 'muted small' }, `${t('law.institution')}: ${nameOf('institutions', law.institution)}`),
           modifierLines(law.modifiers.institution_modifier)]]
         : h('span', { class: 'muted' }, t('common.none'))),
-    h('div', { class: 'preview-group' },
-      h('h4', {}, t('law.start')),
-      startChips.length ? h('div', { class: 'chips' }, startChips) : h('span', { class: 'muted' }, t('law.start_none'))),
     h('div', { class: 'preview-group' },
       h('h4', {}, t('company.translations', { count: filled.length, total: store.state.languages.length })),
       h('div', { class: 'chips' }, store.state.languages.map((l) =>
@@ -632,20 +613,6 @@ function stancesSection() {
     field(t('law.parent'), parent, law.mode === 'override' && !law.parent ? t('law.parent_override_hint') : t('law.parent_hint')),
     h('div', { class: 'stance-table' }, rows),
     h('p', { class: 'muted small' }, t('law.stances_note')));
-}
-
-function startSection() {
-  const law = editing;
-  const check = (name, label, hint, disabled = false) => h('div', {},
-    h('label', { class: 'check' },
-      h('input', { type: 'checkbox', checked: law.start[name], disabled,
-        onchange: (event) => { law.start[name] = event.target.checked; changed(); } }),
-      label),
-    h('p', { class: 'muted small' }, hint));
-  return section(t('law.start'), t('law.start_hint'),
-    check('all', t('law.start_all'), t('law.start_all_hint')),
-    check('default', t('law.start_default'),
-      law.mode === 'override' ? t('law.start_default_override') : t('law.start_default_hint'), law.mode === 'override'));
 }
 
 function conditionBlock(name) {
@@ -789,7 +756,6 @@ const builders = {
   basic: basicSection,
   images: imagesSection,
   stances: stancesSection,
-  start: startSection,
   unlock: unlockSection,
   effects: effectsSection,
   special: specialSection,

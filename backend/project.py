@@ -12,7 +12,7 @@ from pathlib import Path
 from .companies import LANGUAGE_PATTERN, company_to_script, empty_company
 from .factories import (factory_to_script, fill_factory, modifier_texts, own_pmgs, own_pms, pm_to_script,
                         pmg_to_script)
-from .laws import fill_law, is_default, law_texts, law_to_script, start_script
+from .laws import fill_law, law_texts, law_to_script
 from .localization import write_loc_file
 from .monuments import fill_monument, history_script, locators_script, monument_to_script
 from .mods import PROJECT_FILE, discover_mods
@@ -260,14 +260,8 @@ def save_project(project_dir, project, modifier_templates=lambda lang: None, kee
                  lambda item, lang: (modifier_texts(item, lang, modifier_templates(lang))
                                      if item["key"] in monument_keys and "pmgs" in item else {}))
 
-    # Laws: a group's default law must be read before the game's own laws ("00_00" sorts first),
-    # the others last; starting laws go in the global history, which runs after all other history.
     laws = project.get("laws", [])
-    _write_script(root, f"common/laws/00_00_{slug}_default_laws.txt",
-                  [law_to_script(law) for law in laws if is_default(law)], generated)
-    _write_script(root, f"common/laws/zzz_{slug}_laws.txt",
-                  [law_to_script(law) for law in laws if not is_default(law)], generated)
-    _write_script(root, f"common/history/global/zzz_{slug}_laws.txt", start_script(laws), generated)
+    _write_script(root, f"common/laws/zzz_{slug}_laws.txt", [law_to_script(law) for law in laws], generated)
     _write_texts(root, slug, "laws", laws, law_texts, generated)
 
     # Imported images: pack the used ones, drop the others.

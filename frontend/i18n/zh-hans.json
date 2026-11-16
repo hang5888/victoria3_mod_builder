@@ -625,14 +625,6 @@
   "law.modifier_title.tax_modifier_very_high": "极高税率",
   "law.special": "税收与接受度",
   "law.special_hint": "税收法律按五种税率给修正；公民权法律按接受度给修正。",
-  "law.start": "开局",
-  "law.start_hint": "开局时的设置。各国自己的开局法律之后放在「国家开局」类型里设置。",
-  "law.start_all": "所有国家开局实行",
-  "law.start_all_hint": "所有国家开局都实行这条法律。写在所有开局历史之后执行的全局历史里，所以会取代各国原本在这组的法律。",
-  "law.start_default": "设为这组的默认法律",
-  "law.start_default_hint": "开局历史没有设置这组法律的国家会用它。游戏用一组中最先读到的法律，所以这条法律会写在比原版更早读取的文件里（待在游戏中确认）。",
-  "law.start_default_override": "只有新法律可以设为默认：已有法律的读取顺序无法改变。",
-  "law.start_none": "只能在游戏中颁布",
   "law.unlock": "解锁与条件",
   "law.list.unlocking_technologies": "解锁科技",
   "law.list_hint.unlocking_technologies": "颁布这条法律需要的科技。",
@@ -675,9 +667,6 @@
   "lproblem.progressiveness": "进步程度必须是数字。",
   "lproblem.parent": "上层法律必须是同组的另一条法律。",
   "lproblem.modifier_value": "修正值必须是数字（或 yes/no）。",
-  "lproblem.default_override": "已有的法律不能设为默认法律。",
-  "lproblem.default_twice": "你的模组已有同组的另一条法律设为默认。",
-  "lproblem.all_twice": "你的模组已有同组的另一条法律设为所有国家开局实行。",
   "law.limit_countries": "限{names}",
   "law.limit_cultures": "限{names}文化",
   "law.limit_more": "（另有条件）",
@@ -688,6 +677,5 @@
   "law.limits": "限定",
   "law.no_limits": "所有国家都能使用",
   "law.limit_group_line": "法律组：{text}",
-  "law.limit_law_line": "这条法律：{text}",
-  "law.note_start_conditions": "这条法律有限定，却设成所有国家开局实行或默认法律：看不到或不能颁布它的国家开局也会实行它。"
+  "law.limit_law_line": "这条法律：{text}"
 }

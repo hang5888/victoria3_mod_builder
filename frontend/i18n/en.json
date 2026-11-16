@@ -625,14 +625,6 @@
   "law.modifier_title.tax_modifier_very_high": "Very high taxes",
   "law.special": "Taxes and acceptance",
   "law.special_hint": "Taxation laws give modifiers for each tax level; citizenship laws give modifiers for acceptance.",
-  "law.start": "Start of the game",
-  "law.start_hint": "When the game starts. The laws single countries start with will be set in country starts (a later mod type).",
-  "law.start_all": "Every country starts with it",
-  "law.start_all_hint": "Every country starts with this law. It is written in the history that runs after all other history, so it replaces the law of this group every country had.",
-  "law.start_default": "Default law of the group",
-  "law.start_default_hint": "Countries whose history sets no law of this group use this one. The game uses the first law of a group it reads, so this law is written in a file read before the base game's laws (to be confirmed in the game).",
-  "law.start_default_override": "Only new laws can be the default: the order in which existing laws are read cannot change.",
-  "law.start_none": "Only enacted in the game",
   "law.unlock": "Unlocking and conditions",
   "law.list.unlocking_technologies": "Technologies",
   "law.list_hint.unlocking_technologies": "Needed to enact the law.",
@@ -675,9 +667,6 @@
   "lproblem.progressiveness": "Progressiveness must be a number.",
   "lproblem.parent": "The parent law must be another law of the same group.",
   "lproblem.modifier_value": "Modifier values must be numbers (or yes/no).",
-  "lproblem.default_override": "An existing law cannot be the default.",
-  "lproblem.default_twice": "Another law of your mod is already the default of this group.",
-  "lproblem.all_twice": "Another law of your mod already starts in every country for this group.",
   "law.limit_countries": "Only {names}",
   "law.limit_cultures": "Only {names} culture",
   "law.limit_more": " (more conditions)",
@@ -688,6 +677,5 @@
   "law.limits": "Who can use it",
   "law.no_limits": "Every country",
   "law.limit_group_line": "Law group: {text}",
-  "law.limit_law_line": "This law: {text}",
-  "law.note_start_conditions": "This law is limited, but every country starts with it or it is the default: countries that cannot see or enact it start with it anyway."
+  "law.limit_law_line": "This law: {text}"
 }

@@ -17,7 +17,7 @@ from backend.factories import (factory_from_block, factory_to_script, modifier_t
                                pmg_to_script, validate_factory)
 from backend.gamedata import FileSystem, GameData, Source  # noqa: E402
 from backend.monuments import monument_to_script, normalize_monument, validate_monument  # noqa: E402
-from backend.laws import (law_from_block, law_to_script, normalize_law, start_script,  # noqa: E402
+from backend.laws import (law_from_block, law_to_script, normalize_law,  # noqa: E402
                           stances_from_block, validate_law)
 from backend.localization import Localization, read_loc_file, read_loc_text  # noqa: E402
 from backend.mods import PROJECT_FILE  # noqa: E402
@@ -456,32 +456,16 @@ class LawTest(unittest.TestCase):
         self.assertIn("modifier_value", validate_law(bad, LAW_GAME, []))
         self.assertIn("braces:on_enact", validate_law({**law, "blocks": {**law["blocks"], "on_enact": "a = {"}},
                                                       LAW_GAME, []))
-        default = {**law, "start": {"all": True, "default": True}}
-        self.assertIn("default_override", validate_law({**default, "mode": "override"}, LAW_GAME, []))
-        other = {**mine, "start": {"all": True, "default": True}}
-        self.assertEqual(sorted(validate_law({**default, "parent": ""}, LAW_GAME, [other])),
-                         ["all_twice", "default_twice"])
 
     def test_normalize_drops_unsafe_input(self):
         law = sample_law()
-        for bad in ({"group": "a b"}, {"unlocking_laws": ["x y"]}, {"start": "all"},
-                    {"modifiers": "x"}, {"parent": "law}"}):
+        for bad in ({"group": "a b"}, {"unlocking_laws": ["x y"]}, {"modifiers": "x"}, {"parent": "law}"}):
             with self.assertRaises(ValueError):
                 normalize_law({**law, **bad})
-        # countries of a start are not kept: single countries get their laws in their own start
-        clean = normalize_law({**law, "names": {"english": " A  law ", "bad lang": "x"},
-                               "start": {"countries": ["GBR"], "all": 1}})
+        # starting laws belong to the country starts: whatever the browser sends is not kept
+        clean = normalize_law({**law, "names": {"english": " A  law ", "bad lang": "x"}, "start": {"all": True}})
         self.assertEqual(clean["names"], {"english": "A law"})
-        self.assertEqual(clean["start"], {"all": True, "default": False})
-
-    def test_start_script(self):
-        laws = [sample_law(key="law_a", start={"all": True, "default": False}),
-                sample_law(key="law_b", start={"all": False, "default": True}),
-                sample_law(key="law_c", start={"all": True, "default": False})]
-        root = parse(start_script(laws)[0]).get("GLOBAL")
-        self.assertEqual([e.key for e in root.entries], ["every_country"])
-        self.assertEqual([e.value for e in root.entries[0].value.entries], ["law_type:law_a", "law_type:law_c"])
-        self.assertEqual(start_script([sample_law()]), [])
+        self.assertNotIn("start", clean)
 
 
 class LocalizationTest(unittest.TestCase):
@@ -728,37 +712,28 @@ class ProjectTest(unittest.TestCase):
 
     def test_laws(self):
         folder = Path(project.create_project(str(self.mods), "Rights", "1.15.1"))
-        new = sample_law(names={"english": "Test Rights"}, descs={"english": "Workers get rights."},
-                         start={"all": True, "default": False})
-        default = sample_law(key="law_test_default", names={"english": "Default"},
-                             start={"all": False, "default": True})
+        new = sample_law(names={"english": "Test Rights"}, descs={"english": "Workers get rights."})
         override = sample_law(key="law_no_workers_rights", mode="override", parent="",
                               names={"english": "No Rights"}, descs={"simp_chinese": "没有权利"})
         proj = project.load_project(folder)
-        proj["laws"] = [new, default, override]
+        proj["laws"] = [new, override]
         generated = project.save_project(folder, proj)
         self.assertEqual(sorted(generated), [
-            "common/history/global/zzz_rights_laws.txt",
-            "common/laws/00_00_rights_default_laws.txt",
             "common/laws/zzz_rights_laws.txt",
             "localization/english/replace/rights_laws_replace_l_english.yml",
             "localization/english/rights_laws_l_english.yml",
             "localization/simp_chinese/replace/rights_laws_replace_l_simp_chinese.yml"])
         laws = parse((folder / "common/laws/zzz_rights_laws.txt").read_text(encoding="utf-8-sig"))
         self.assertEqual([e.key for e in laws.entries], ["law_test_rights", "REPLACE_OR_CREATE:law_no_workers_rights"])
-        defaults = parse((folder / "common/laws/00_00_rights_default_laws.txt").read_text(encoding="utf-8-sig"))
-        self.assertEqual([e.key for e in defaults.entries], ["law_test_default"])
-        history = parse((folder / "common/history/global/zzz_rights_laws.txt").read_text(encoding="utf-8-sig"))
-        self.assertEqual(history.get("GLOBAL").get("every_country").get("activate_law"), "law_type:law_test_rights")
         english = read_loc_file(folder / "localization/english/rights_laws_l_english.yml")["english"]
-        self.assertEqual(english, {"law_test_rights": "Test Rights", "law_test_rights_desc": "Workers get rights.",
-                                   "law_test_default": "Default"})
+        self.assertEqual(english, {"law_test_rights": "Test Rights", "law_test_rights_desc": "Workers get rights."})
         replaced = read_loc_file(folder / "localization/simp_chinese/replace/rights_laws_replace_l_simp_chinese.yml")
         self.assertEqual(replaced["simp_chinese"], {"law_no_workers_rights_desc": "没有权利"})
-        self.assertEqual(project.load_project(folder)["laws"], [new, default, override])
-        # an override is never a default, whatever the project file says
-        proj["laws"] = [{**override, "start": {"all": False, "default": True}}]
-        self.assertNotIn("common/laws/00_00_rights_default_laws.txt", project.save_project(folder, proj))
+        self.assertEqual(project.load_project(folder)["laws"], [new, override])
+        # starting laws saved by an earlier version are dropped
+        proj["laws"] = [{**new, "start": {"all": True, "default": True}}]
+        project.save_project(folder, proj)
+        self.assertEqual(project.load_project(folder)["laws"], [new])
 
     def test_stale_files_are_removed_but_nothing_else(self):
         folder = Path(project.create_project(str(self.mods), "Clean", "1.15.1"))
@@ -826,7 +801,7 @@ class InterfaceTextTest(unittest.TestCase):
         "law.list_hint.": ['unlocking_technologies', 'unlocking_laws', 'requires_law_or', 'disallowing_laws'],
         "law.modifier_title.": ['modifier', 'institution_modifier', 'acceptance_modifier', 'tax_modifier_very_low', 'tax_modifier_low', 'tax_modifier_medium', 'tax_modifier_high', 'tax_modifier_very_high'],
         "law.stance.": ["strongly_approve", "approve", "neutral", "disapprove", "strongly_disapprove"],
-        "lproblem.": ['key_missing', 'key_invalid', 'key_exists', 'group_missing', 'group_unknown', 'icon_missing', 'progressiveness', 'parent', 'modifier_value', 'default_override', 'default_twice', 'all_twice'],
+        "lproblem.": ['key_missing', 'key_invalid', 'key_exists', 'group_missing', 'group_unknown', 'icon_missing', 'progressiveness', 'parent', 'modifier_value'],
         "factory.kind.": ["ref", "own", "override"],
         "factory.target.": ["building", "state", "country"],
         "factory.scale.": ["workforce_scaled", "level_scaled", "unscaled", "throughput_scaled"],

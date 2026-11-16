@@ -3,15 +3,7 @@
 A law belongs to an existing law group. Interest groups take their stance on a law from
 their ideologies, which this tool does not change: a new law gets stances only through its
 `parent`, whose stances it inherits (the game also treats it as a variant of the parent).
-
-Besides the law itself, the model keeps where it starts:
-  start: {all, default}
-    all:       every country has it when the game starts; written in the global history,
-               which runs after all other history
-    default:   (new laws only) the law of its group for countries whose history sets none;
-               the game uses the group's first law it reads, so it is written in a file that
-               is read before the game's own laws
-The laws single countries start with belong to their own start (not made yet).
+Which laws countries start with belongs to the country starts (not made yet), not here.
 
 As with companies, fields without a real editor are kept as raw script text.
 """
@@ -31,13 +23,9 @@ RAW_BLOCKS = ("is_visible", "can_enact", "on_enact", "on_activate", "on_deactiva
 NUMBER_PATTERN = re.compile(r"^-?\d+(\.\d+)?$")
 
 
-def empty_start():
-    return {"all": False, "default": False}
-
-
 def empty_law():
     law = {"key": "", "mode": "new", "names": {}, "descs": {}, "modifiers": {name: [] for name in MODIFIER_FIELDS},
-           "blocks": {name: "" for name in RAW_BLOCKS}, "start": empty_start(), "extra": ""}
+           "blocks": {name: "" for name in RAW_BLOCKS}, "extra": ""}
     for field in SCALAR_FIELDS:
         law[field] = ""
     for field in LIST_FIELDS:
@@ -50,8 +38,7 @@ def fill_law(stored):
     law = {**empty_law(), **stored}
     law["modifiers"] = {**empty_law()["modifiers"], **(stored.get("modifiers") or {})}
     law["blocks"] = {**empty_law()["blocks"], **(stored.get("blocks") or {})}
-    start = stored.get("start") or {}
-    law["start"] = {name: bool(start.get(name, value)) for name, value in empty_start().items()}
+    law.pop("start", None)  # starting laws were set here once; they belong to the country starts now
     return law
 
 
@@ -147,10 +134,6 @@ def normalize_law(raw):
         raise ValueError("blocks")
     for name in RAW_BLOCKS:
         law["blocks"][name] = str(blocks.get(name) or "").replace("\r\n", "\n")
-    start = raw.get("start") or {}
-    if not isinstance(start, dict):
-        raise ValueError("start")
-    law["start"] = {"all": bool(start.get("all")), "default": bool(start.get("default"))}
     law["extra"] = str(raw.get("extra") or "").replace("\r\n", "\n")
     return law
 
@@ -192,14 +175,6 @@ def validate_law(law, game, others):
             errors.append(f"braces:{name}")
     if not braces_balanced(law["extra"]):
         errors.append("braces:extra")
-    start = law["start"]
-    same_group = [other for other in others if other["group"] == law["group"]]
-    if start["default"] and law["mode"] == "override":
-        errors.append("default_override")
-    if start["default"] and any(other["start"]["default"] for other in same_group):
-        errors.append("default_twice")
-    if start["all"] and any(other["start"]["all"] for other in same_group):
-        errors.append("all_twice")
     return errors
 
 
@@ -265,22 +240,6 @@ def law_to_script(law):
         out.pop()
     out.append("}")
     return "\n".join(out)
-
-
-def is_default(law):
-    """Written in the file read before the game's laws (only new laws can be a group's default)."""
-    return law["mode"] == "new" and law["start"]["default"]
-
-
-def start_script(laws):
-    """The global history that gives every country the laws it should start with."""
-    every = [law["key"] for law in laws if law["start"]["all"]]
-    if not every:
-        return []
-    out = ["GLOBAL = {", "\tevery_country = {"]
-    out.extend(f"\t\tactivate_law = law_type:{key}" for key in every)
-    out.extend(["\t}", "}"])
-    return ["\n".join(out)]
 
 
 def law_texts(law, lang):
