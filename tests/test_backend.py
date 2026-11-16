@@ -16,6 +16,7 @@ from backend.factories import (factory_from_block, factory_to_script, modifier_t
                                normalize_factory, own_keys, pm_from_block, pm_to_script, pmg_from_block,
                                pmg_to_script, validate_factory)
 from backend.gamedata import FileSystem, GameData, Source  # noqa: E402
+from backend.monuments import monument_to_script, normalize_monument, validate_monument  # noqa: E402
 from backend.localization import Localization, read_loc_file, read_loc_text  # noqa: E402
 from backend.mods import PROJECT_FILE  # noqa: E402
 from backend.pdx_script import braces_balanced, parse, split_prefix  # noqa: E402
@@ -326,6 +327,48 @@ class FactoryTest(unittest.TestCase):
         self.assertEqual(texts["building_test_works_throughput_add"], "Débit de $building_test_works$")
 
 
+def sample_monument(**changes):
+    monument = normalize_monument({
+        **sample_factory(), "key": "building_test_tower", "building_group": "bg_monuments",
+        "blocks": {"potential": "has_dlc_feature = ep1_content", "possible": ""},
+        "extra": 'unique = yes\nlocator = "old_locator"\nbuildable = yes',
+        "location": {"state": "STATE_ILE_DE_FRANCE", "x": 4144.3, "z": 2720.46}, "history": "", "effects": "simple"})
+    monument.update(changes)
+    return monument
+
+
+class MonumentTest(unittest.TestCase):
+    def test_script(self):
+        entry = parse(monument_to_script(sample_monument(), "mymod")).entries[0]
+        block = entry.value
+        self.assertEqual(entry.key, "building_test_tower")
+        self.assertEqual([e.raw for e in block.get("potential").entries],
+                         ["state_region = s:STATE_ILE_DE_FRANCE", "has_dlc_feature = ep1_content"])
+        self.assertEqual(block.get_all("locator"), ["building_test_tower_locator"])  # the tool's, not the old one
+        self.assertEqual(block.get("buildable"), "yes")
+
+    def test_kept_locator_and_history(self):
+        kept = sample_monument(mode="override", location={"state": "", "x": None, "z": None, "locator": "old_locator"})
+        block = parse(monument_to_script(kept, "mymod")).entries[0].value
+        self.assertEqual(block.get_all("locator"), ["old_locator"])
+        self.assertNotIn("state_region", block.get("potential").inner())
+        moved = sample_monument(mode="override")
+        self.assertEqual(parse(monument_to_script(moved, "mymod")).entries[0].value.get("locator"),
+                         "building_test_tower_locator_mymod")
+        placed = parse(monument_to_script(sample_monument(history="FRA"), "mymod")).entries[0].value
+        self.assertEqual(placed.get_all("buildable"), ["no"])
+
+    def test_normalize_and_validate(self):
+        monument = sample_monument()
+        self.assertEqual(validate_monument(monument, NO_KEYS, NO_KEYS), [])
+        self.assertEqual(validate_monument(sample_monument(history="FRA", location={"state": ""}), NO_KEYS, NO_KEYS),
+                         ["history_state"])
+        for change in ({"location": {"state": "a b"}}, {"location": {"x": 1}}, {"location": {"x": "far", "z": 1}},
+                       {"history": "c:FRA }"}, {"location": []}):
+            with self.assertRaises(ValueError, msg=change):
+                normalize_monument({**monument, **change})
+
+
 class LocalizationTest(unittest.TestCase):
     def test_read_and_clean(self):
         entries = read_loc_text('l_english:\n company_x:0 "The #b $other$#! Co." # note\n other: "Big"\n')["english"]
@@ -519,6 +562,31 @@ class ProjectTest(unittest.TestCase):
         self.assertFalse((folder / "gfx").exists())
         self.assertEqual(project.load_project(folder)["images"], [])
 
+    def test_monuments(self):
+        folder = Path(project.create_project(str(self.mods), "Wonders", "1.15.1"))
+        tower = sample_monument(names={"english": "Test Tower"})
+        palace = sample_monument(key="building_test_palace", history="FRA",
+                                 location={"state": "STATE_ILE_DE_FRANCE", "x": None, "z": None, "locator": ""})
+        palace["pmgs"] = [{"type": "ref", "key": "pmg_base_building_eiffel_tower"}]
+        proj = project.load_project(folder)
+        proj["monuments"] = [tower, palace]
+        generated = project.save_project(folder, proj)
+        for rel in ("common/buildings/zzz_wonders_monuments.txt", "gfx/map/map_object_data/zzz_wonders_monuments.txt",
+                    "common/history/buildings/zzz_wonders_monuments.txt",
+                    "localization/english/wonders_monuments_l_english.yml"):
+            self.assertIn(rel, generated)
+        locators = parse((folder / "gfx/map/map_object_data/zzz_wonders_monuments.txt").read_text(encoding="utf-8-sig"))
+        self.assertEqual([e.value.get("name") for e in locators.entries], ["building_test_tower_locator"])
+        position = locators.entries[0].value.get("instances").entries[0].value.get("position").items()
+        self.assertEqual(position, ["4144.300000", "0.000000", "2720.460000"])
+        history = parse((folder / "common/history/buildings/zzz_wonders_monuments.txt").read_text(encoding="utf-8-sig"))
+        create = history.get("BUILDINGS").get("s:STATE_ILE_DE_FRANCE").get("region_state:FRA").get("create_building")
+        self.assertEqual(create.get("building"), "building_test_palace")
+        english = read_loc_file(folder / "localization/english/wonders_monuments_l_english.yml")["english"]
+        self.assertEqual(english["building_test_tower"], "Test Tower")
+        self.assertIn("building_test_tower_throughput_add", english)
+        self.assertEqual(project.load_project(folder)["monuments"], [tower, palace])
+
     def test_stale_files_are_removed_but_nothing_else(self):
         folder = Path(project.create_project(str(self.mods), "Clean", "1.15.1"))
         mine = folder / "common" / "company_types" / "my_own_file.txt"
@@ -578,13 +646,13 @@ class InterfaceTextTest(unittest.TestCase):
         "error.": ["offline", "server_error", "not_loaded", "no_project", "folders_invalid", "bad_request",
                    "not_found", "name_missing", "browse_unavailable", "bad_path", "unsupported_texture",
                    "forbidden", "open_folder_failed", "image_kind", "image_too_large", "image_format"],
-        "sidebar.category.": ["company", "factory"],
+        "sidebar.category.": ["company", "factory", "monument"],
         "factory.kind.": ["ref", "own", "override"],
         "factory.target.": ["building", "state", "country"],
         "factory.scale.": ["workforce_scaled", "level_scaled", "unscaled", "throughput_scaled"],
         "fblock.": ["potential", "possible"],
-        "fset.label.": ['ai_nationalization_desire', 'ai_selection', 'ai_value', 'ai_weight', 'aliases', 'buildable', 'can_build_government', 'can_build_private', 'can_have_country_monopoly', 'can_switch_owner', 'category_building_type', 'city_lights_color_index', 'construction_modifier', 'disallowing_laws', 'disallowing_religions', 'downsizeable', 'economic_contribution', 'expandable', 'generates_residences', 'ignore_stateregion_max_level', 'investment_scores', 'is_hidden_when_unavailable', 'lens', 'levels_per_mesh', 'min_raise_to_hire', 'ownership_type', 'pollution_generation', 'profession_ratio', 'replacement_if_valid', 'required_input_goods', 'residence_points_per_level', 'scoring_override', 'should_auto_expand', 'slaves_role', 'terrain_manipulator', 'timed_modifiers', 'unlocking_company_categories', 'unlocking_geographic_regions', 'unlocking_global_technologies', 'unlocking_identity', 'unlocking_principles', 'unlocking_production_methods', 'unlocking_religions', 'valid_pop_culture_traits'],
-        "fset.hint.": ['ai_nationalization_desire', 'ai_selection', 'ai_value', 'ai_weight', 'aliases', 'can_build_government', 'can_build_private', 'can_have_country_monopoly', 'can_switch_owner', 'category_building_type', 'city_lights_color_index', 'construction_modifier', 'economic_contribution', 'generates_residences', 'ignore_stateregion_max_level', 'investment_scores', 'is_hidden_when_unavailable', 'lens', 'levels_per_mesh', 'min_raise_to_hire', 'ownership_type', 'pollution_generation', 'profession_ratio', 'replacement_if_valid', 'required_input_goods', 'residence_points_per_level', 'scoring_override', 'should_auto_expand', 'slaves_role', 'terrain_manipulator', 'timed_modifiers', 'unlocking_global_technologies', 'unlocking_identity', 'unlocking_production_methods', 'valid_pop_culture_traits'],
+        "fset.label.": ['ai_nationalization_desire', 'ai_selection', 'ai_value', 'ai_weight', 'aliases', 'buildable', 'can_build_government', 'can_build_private', 'can_have_country_monopoly', 'can_switch_owner', 'category_building_type', 'city_gfx_interactions', 'city_lights_color_index', 'construction_modifier', 'disallowing_laws', 'disallowing_religions', 'downsizeable', 'economic_contribution', 'enable_air_connection', 'entity_constructed', 'entity_not_constructed', 'entity_under_construction', 'expandable', 'generates_residences', 'ignore_stateregion_max_level', 'investment_scores', 'is_hidden_when_unavailable', 'lens', 'levels_per_mesh', 'meshes', 'min_raise_to_hire', 'ownership_type', 'pollution_generation', 'profession_ratio', 'replacement_if_valid', 'required_input_goods', 'residence_points_per_level', 'scoring_override', 'should_auto_expand', 'slaves_role', 'statue', 'terrain_manipulator', 'timed_modifiers', 'unique', 'unlocking_company_categories', 'unlocking_geographic_regions', 'unlocking_global_technologies', 'unlocking_identity', 'unlocking_principles', 'unlocking_production_methods', 'unlocking_religions', 'valid_pop_culture_traits'],
+        "fset.hint.": ['ai_nationalization_desire', 'ai_selection', 'ai_value', 'ai_weight', 'aliases', 'can_build_government', 'can_build_private', 'can_have_country_monopoly', 'can_switch_owner', 'category_building_type', 'city_gfx_interactions', 'city_lights_color_index', 'construction_modifier', 'economic_contribution', 'enable_air_connection', 'entity_constructed', 'entity_not_constructed', 'entity_under_construction', 'generates_residences', 'ignore_stateregion_max_level', 'investment_scores', 'is_hidden_when_unavailable', 'lens', 'levels_per_mesh', 'meshes', 'min_raise_to_hire', 'ownership_type', 'pollution_generation', 'profession_ratio', 'replacement_if_valid', 'required_input_goods', 'residence_points_per_level', 'scoring_override', 'should_auto_expand', 'slaves_role', 'statue', 'terrain_manipulator', 'timed_modifiers', 'unique', 'unlocking_global_technologies', 'unlocking_identity', 'unlocking_production_methods', 'valid_pop_culture_traits'],
         "fset.group.": ['conditions', 'economy', 'misc', 'other', 'unlock'],
         "fset.ownership.": ["self", "other", "no_ownership"],
         "fset.warn.": ['aliases', 'buildable', 'expandable', 'ownership_type', 'terrain_manipulator'],
@@ -592,7 +660,7 @@ class InterfaceTextTest(unittest.TestCase):
         "fproblem.": ["key_missing", "key_invalid", "key_exists", "group_missing", "group_invalid", "icon_missing",
                       "city_type_invalid", "construction_invalid", "braces", "pmgs_missing", "pmg_key_missing",
                       "pmg_key_invalid", "pmg_key_exists", "pmg_empty", "pm_key_missing", "pm_key_invalid",
-                      "pm_key_exists", "pm_value"],
+                      "pm_key_exists", "pm_value", "history_state", "history_override"],
     }
 
     def test_keys(self):

@@ -101,12 +101,14 @@ export function companyName(company) {
     || company.key || t('company.unnamed');
 }
 
-// Name of a factory in the project, by the same rules.
-export function factoryName(factory) {
-  const original = factory.mode === 'override' && store.index ? store.index.factories.get(factory.key) : null;
-  return factory.names[language()] || (original && original.name) || factory.names.english
-    || factory.key || t('factory.unnamed');
+// Name of a factory or monument in the project, by the same rules.
+function buildingName(building, unnamed) {
+  const original = building.mode === 'override' && store.index ? store.index.factories.get(building.key) : null;
+  return building.names[language()] || (original && original.name) || building.names.english || building.key || unnamed;
 }
+
+export const factoryName = (factory) => buildingName(factory, t('factory.unnamed'));
+export const monumentName = (monument) => buildingName(monument, t('monument.unnamed'));
 
 // Game path of an object's icon, or '' when it has none.
 export function iconOf(kind, key) {

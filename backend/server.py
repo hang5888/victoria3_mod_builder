@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 from . import mods, project, textures
 from .companies import normalize_company, validate_company
 from .factories import normalize_factory, own_keys, validate_factory
+from .monuments import normalize_monument, validate_monument
 from .gamedata import GameData, game_languages
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -304,7 +305,16 @@ def api_post(app, path, body):
             app.save_project(path_, proj, body)
             return proj
     if path == "/api/project/factory":
-        return save_factory(app, body)
+        return save_building(app, body, "factories")
+    if path == "/api/project/monument":
+        return save_building(app, body, "monuments")
+    if path == "/api/project/monument/delete":
+        with app.lock:
+            path_ = app.require_project()
+            proj = project.load_project(path_)
+            proj["monuments"] = [m for m in proj["monuments"] if m["key"] != body.get("key")]
+            app.save_project(path_, proj, body)
+            return proj
     if path == "/api/project/factory/delete":
         with app.lock:
             path_ = app.require_project()
@@ -353,29 +363,33 @@ def save_company(app, body):
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
 
 
-def save_factory(app, body):
-    """Add or update one factory in the current project and regenerate the mod files."""
-    if not isinstance(body.get("factory"), dict):
+def save_building(app, body, kind):
+    """Add or update one factory or monument (`kind`: its list in the project) and regenerate the mod files."""
+    item = body.get("factory" if kind == "factories" else "monument")
+    if not isinstance(item, dict):
         raise ApiError("bad_request")
     try:
-        clean = normalize_factory(body["factory"])
-    except (ValueError, AttributeError):
+        clean = normalize_factory(item) if kind == "factories" else normalize_monument(item)
+    except (ValueError, TypeError, AttributeError):
         raise ApiError("bad_request")
     original_key = body.get("original_key") or clean["key"]
     with app.lock:
         data = app.require_data()
         path = app.require_project()
         proj = project.load_project(path)
-        others = [f for f in proj["factories"] if f["key"] != original_key]
+        # buildings, groups and methods share their keys across factories and monuments
+        others = [b for b in proj[kind] if b["key"] != original_key]
+        others += proj["monuments" if kind == "factories" else "factories"]
         game = {"buildings": set(data.factories), "pmgs": set(data.pmgs), "pms": set(data.pms)}
-        errors = validate_factory(clean, game, own_keys(others))
+        validate = validate_factory if kind == "factories" else validate_monument
+        errors = validate(clean, game, own_keys(others))
         if errors:
             return {"errors": errors}
-        index = next((i for i, f in enumerate(proj["factories"]) if f["key"] == original_key), None)
+        index = next((i for i, b in enumerate(proj[kind]) if b["key"] == original_key), None)
         if index is None:
-            proj["factories"].append(clean)
+            proj[kind].append(clean)
         else:
-            proj["factories"][index] = clean
+            proj[kind][index] = clean
         generated = app.save_project(path, proj, body)
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
 

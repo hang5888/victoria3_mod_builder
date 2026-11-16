@@ -7,7 +7,7 @@
 // The list shows what is saved in the mod: a new item, or a change to one, appears after saving.
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { store, companyName, factoryName, setProject, keptImages } from './store.js';
+import { store, companyName, factoryName, monumentName, setProject, keptImages } from './store.js';
 import { h, fill, toast } from './ui.js';
 import { thumb } from './icons.js';
 import { run } from './widgets.js';
@@ -16,6 +16,7 @@ import { run } from './widgets.js';
 const KINDS = {
   company: { items: (project) => project.companies, name: companyName, icon: (item) => item.icon },
   factory: { items: (project) => project.factories || [], name: factoryName, icon: (item) => item.icon },
+  monument: { items: (project) => project.monuments || [], name: monumentName, icon: (item) => item.icon },
 };
 
 // Collapsed categories, and '' when the whole sidebar is collapsed.

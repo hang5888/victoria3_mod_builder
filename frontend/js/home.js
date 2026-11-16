@@ -374,6 +374,9 @@ function typesCard() {
       typeCard('factory', t('home.type.factory'), t('home.type.factory_hint'),
         find(data ? data.building_backgrounds : [], 'light_industry'), find(data ? data.building_icons : [], 'food_industry'),
         (counts.factories || []).length),
+      typeCard('monument', t('home.type.monument'), t('home.type.monument_hint'),
+        find(data ? data.building_backgrounds : [], 'monuments'), find(data ? data.building_icons : [], 'eiffel'),
+        (counts.monuments || []).length),
       h('div', { class: 'type-card planned' },
         h('div', { class: 'type-art' }, h('span', { class: 'type-plus' }, '+')),
         h('div', { class: 'type-body' }, h('b', {}, t('home.type.more')), h('span', {}, t('home.type.planned'))))));

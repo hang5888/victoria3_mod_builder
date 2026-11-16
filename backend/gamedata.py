@@ -331,6 +331,54 @@ class GameData:
             if lens:
                 self.lenses.add(lens)
         self.key_lists["lenses"] = sorted(self.lenses)
+        self._load_map_objects()
+
+    def _load_map_objects(self):
+        """Map positions of the locators buildings use (monuments), and who owns each state at the start."""
+        wanted = set()
+        for factory in self.factories.values():
+            for version in (factory, *factory["versions"]):
+                for entry in pdx_script.parse(version["extra"]).entries:
+                    if entry.key == "locator" and isinstance(entry.value, str):
+                        wanted.add(entry.value)
+        self.locators = {}
+        for source, path, rel_name in self.fs.list_files("gfx/map/map_object_data", ".txt"):
+            text = read_text(path)
+            if "game_object_locator" not in text or not any(name in text for name in wanted):
+                continue
+            for entry in pdx_script.parse(text).entries:
+                if entry.key != "game_object_locator" or not isinstance(entry.value, Block):
+                    continue
+                name, instances = entry.value.get("name"), entry.value.get("instances")
+                if name not in wanted or not isinstance(instances, Block):
+                    continue
+                for instance in instances.entries:
+                    position = instance.value.get("position") if isinstance(instance.value, Block) else None
+                    numbers = position.items() if isinstance(position, Block) else []
+                    try:
+                        self.locators[name] = (float(numbers[0]), float(numbers[2]))
+                        break
+                    except (IndexError, ValueError):
+                        continue
+        self.state_owners = {}
+        for source, path, rel_name in self.fs.list_files("common/history/states", ".txt"):
+            try:
+                root = pdx_script.parse(read_text(path))
+            except (OSError, RecursionError) as error:
+                self.warnings.append(f"{source.name}: common/history/states/{rel_name}: {error}")
+                continue
+            for top in root.entries:
+                if not isinstance(top.value, Block):
+                    continue
+                for state in top.value.entries:
+                    if not (state.key and state.key.startswith("s:") and isinstance(state.value, Block)):
+                        continue
+                    owners = self.state_owners.setdefault(state.key[2:], [])
+                    for create in state.value.get_all("create_state"):
+                        country = create.get("country") if isinstance(create, Block) else None
+                        tag = country[2:] if isinstance(country, str) and country.startswith("c:") else None
+                        if tag and tag not in owners:
+                            owners.append(tag)
 
     def _load_textures(self):
         suffixes = (".dds", ".png")  # some mods ship .png icons
@@ -428,6 +476,8 @@ class GameData:
             "pop_types": [{"key": key, "name": loc.name(key), **pop} for key, pop in self.pop_types.items()],
             "laws": [{"key": key, "name": loc.name(key), "group_name": loc.name(law["group"]) if law["group"] else ""}
                      for key, law in self.laws.items()],
+            "locators": [{"key": name, "x": x, "z": z} for name, (x, z) in self.locators.items()],
+            "state_owners": self.state_owners,
             "construction_costs": [{"key": key, "value": value} for key, value in self.construction_costs.items()],
             "building_icons": self.building_icons,
             "building_backgrounds": self.building_backgrounds,

@@ -1,17 +1,24 @@
-// Factory builder: the mod's contents (sidebar), the factory being edited, the editor,
-// and the existing buildings (right).
+// Building builders: the mod's contents (sidebar), the building being edited, the editor,
+// and the existing buildings (right). Two pages are built from this module: production
+// buildings ("factory") and monuments ("monument", see docs/mod_types/monument.md). They share
+// the editor; KINDS holds what differs, and each page keeps its own state.
 //
-// A factory's production method groups (pmgs) are entries {type: 'ref', key} pointing at an
+// A building's production method groups (pmgs) are entries {type: 'ref', key} pointing at an
 // existing group, or {type: 'own', ...} written by this mod (mode 'new' or 'override').
 // The production methods (pms) of an own group are entries of the same two types.
+//
+// A monument also has `location` {state, x, z, locator}, `history` (owner tag when it exists at
+// the start) and `effects`: 'simple' (one own group with one method, edited as a list of
+// effects) or 'full' (groups as in factories).
 import { api, textureUrl } from './api.js';
 import { t } from './i18n.js';
-import { store, refreshState, loadData, language, languageName, nameOf, factoryName, setProject, editingImages,
-  keptImages } from './store.js';
+import { store, refreshState, loadData, language, languageName, nameOf, factoryName, monumentName, setProject,
+  editingImages, keptImages } from './store.js';
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
 import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
 import { thumb, objectIcon, pickerIcon } from './icons.js';
-import { bracesBalanced } from './script.js';
+import { bracesBalanced, scriptValue, setScriptValue } from './script.js';
+import { StateMap } from './map.js';
 import { scriptFields, splitScript, joinScript, usedValues } from './scriptfields.js';
 import { COUNTRY_KINDS, STATE_KINDS, conditionEditor, clearConditionCache, countConditions, valueButton } from './conditions.js';
 import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, pickerItems, imageField,
@@ -19,7 +26,7 @@ import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, pi
 
 const RAW_BLOCKS = ['potential', 'possible'];
 const FIELDS = ['key', 'mode', 'names', 'building_group', 'icon', 'background', 'city_type', 'required_construction',
-  'unlocking_technologies', 'ai_value', 'blocks', 'pmgs', 'extra'];
+  'unlocking_technologies', 'ai_value', 'blocks', 'pmgs', 'extra', 'location', 'history', 'effects'];
 const PM_FIELDS = ['texture', 'is_default', 'inputs', 'outputs', 'employment', 'unlocking_technologies',
   'unlocking_laws', 'modifiers', 'extra'];
 const TARGETS = ['building', 'state', 'country'];
@@ -28,17 +35,55 @@ const KEY_PATTERN = /^[A-Za-z0-9_.\-]+$/;
 const NUMBER_PATTERN = /^-?\d+(\.\d+)?$/;
 const MODIFIER_VALUE_PATTERN = /^(-?\d+(\.\d+)?|yes|no)$/;
 const PMG_TEXTURE = 'gfx/interface/icons/generic_icons/mixed_icon_base.dds';
+const WONDER_TEXTURE = 'gfx/interface/icons/production_method_icons/wonders.dds';
+const MONUMENT_GROUPS = ['bg_monuments', 'bg_skyscraper'];
 const PAGE = 200;
 
+// What differs between the pages.
+const KINDS = {
+  factory: {
+    name: 'factory', list: 'factories', placeholder: 'building_my_factory', displayName: factoryName,
+    newLabel: () => t('factory.new'), existing: () => t('factory.existing'), copyLabel: () => t('factory.copy'),
+    discardText: () => t('factory.discard_confirm'), alreadyText: () => t('factory.already_in_project'),
+  },
+  monument: {
+    name: 'monument', list: 'monuments', placeholder: 'building_my_monument', displayName: monumentName,
+    newLabel: () => t('monument.new'), existing: () => t('monument.existing'), copyLabel: () => t('monument.copy'),
+    discardText: () => t('monument.discard_confirm'), alreadyText: () => t('monument.already_in_project'),
+  },
+};
+
+const freshPage = (filters) => ({ editing: null, originalKey: null, editingProject: null, dirty: false, filters,
+  listLimit: PAGE, expanded: null });
+const pages = {
+  factory: freshPage({ query: '', source: '', group: '', output: '', input: '' }),
+  monument: freshPage({ query: '', source: '', group: '', region: '' }),
+};
+let kind = KINDS.factory;
+
 let root = null;
-let editing = null;        // the factory in the editor
+let editing = null;        // the building in the editor
 let originalKey = null;    // its key in the project file, when it was opened from there
 let editingProject = null; // folder of the project `editing` belongs to
 let dirty = false;
-const filters = { query: '', source: '', group: '', output: '', input: '' };
+let filters = pages.factory.filters;
 let listed = [];
 let listLimit = PAGE;
 let expanded = null;
+let locationMap = null;    // the map of the monument page
+let locationMapData = null;
+
+// Make `name` the page this module works on: keep the state of the other one.
+function usePage(name) {
+  if (kind.name === name) return;
+  Object.assign(pages[kind.name], { editing, originalKey, editingProject, dirty, filters, listLimit, expanded });
+  kind = KINDS[name];
+  ({ editing, originalKey, editingProject, dirty, filters, listLimit, expanded } = pages[name]);
+}
+
+// The building open on a page, whether or not it is the one shown.
+const editingOn = (name) => (name === kind.name ? editing : pages[name].editing);
+const isMonumentPage = () => kind.name === 'monument';
 let goodsCache = null;             // building key -> {inputs, outputs} (sets of goods), for the filters
 const versionChoice = new Map();   // building key -> source of the version shown in the list
 const chosenPm = new Map();        // pmg entry -> pm entry picked for the estimate
@@ -47,10 +92,11 @@ const els = {};
 const sections = {};
 
 window.addEventListener('beforeunload', (event) => {
-  if (dirty) event.preventDefault();
+  if (dirty || Object.entries(pages).some(([name, page]) => name !== kind.name && page.dirty)) event.preventDefault();
 });
 
 function blankFactory() {
+  if (isMonumentPage()) return blankMonument();
   const group = store.index && store.index.building_groups.has('bg_light_industry') ? 'bg_light_industry' : '';
   const defaults = groupDefaults(group);
   return {
@@ -61,13 +107,37 @@ function blankFactory() {
   };
 }
 
-// The editable part of a building (drops display-only fields such as its source).
-function modelOf(factory) {
-  const model = structuredClone(Object.fromEntries(FIELDS.map((name) => [name, factory[name]])));
-  return { ...blankFactory(), ...model, blocks: { ...blankFactory().blocks, ...model.blocks } };
+// A new monument as the base game writes them, with a list of effects.
+function blankMonument() {
+  return {
+    key: '', mode: 'new', names: {}, building_group: 'bg_monuments', icon: '',
+    background: groupDefaults('bg_monuments').background, city_type: '', required_construction: 'construction_cost_monument',
+    unlocking_technologies: [], ai_value: '', blocks: Object.fromEntries(RAW_BLOCKS.map((name) => [name, ''])),
+    pmgs: [simpleGroup(null)],
+    extra: 'expandable = no\ndownsizeable = no\nunique = yes\nentity_not_constructed = { }\n'
+      + 'entity_under_construction = { "building_construction_3x3_entity" }\ncity_gfx_interactions = {\n\tclear_size_area = yes\n\tsize = 3\n}',
+    location: { state: '', x: null, z: null, locator: '' }, history: '', effects: 'simple',
+  };
 }
 
-export async function renderFactory(container) {
+// The editable part of a building (drops display-only fields such as its source).
+function modelOf(factory) {
+  const blank = blankFactory();
+  const model = structuredClone(Object.fromEntries(FIELDS.filter((name) => factory[name] !== undefined && name in blank)
+    .map((name) => [name, factory[name]])));
+  return { ...blank, ...model, blocks: { ...blank.blocks, ...model.blocks } };
+}
+
+export function renderFactory(container) {
+  return renderPage(container, 'factory');
+}
+
+export function renderMonument(container) {
+  return renderPage(container, 'monument');
+}
+
+async function renderPage(container, name) {
+  usePage(name);
   root = container;
   await refreshState();
   const data = await loadData();
@@ -95,9 +165,9 @@ export async function renderFactory(container) {
   renderMiddle();
   renderRight();
   // an item of this page clicked in the sidebar of another page
-  const wanted = takePending('factory');
-  const factory = wanted && wanted !== originalKey && store.project.factories.find((f) => f.key === wanted);
-  if (factory) await edit(factory, factory.key);
+  const wanted = takePending(kind.name);
+  const item = wanted && wanted !== originalKey && store.project[kind.list].find((f) => f.key === wanted);
+  if (item) await edit(item, item.key);
 }
 
 // ----------------------------------------------------------------- helpers
@@ -176,11 +246,12 @@ function groupDefaults(group) {
     background: most(same, 'background') || most(related, 'background') };
 }
 
-// Keys written by the other factories of the mod.
+// Keys written by the other factories and monuments of the mod (they share one set of keys).
 function projectKeys() {
   const keys = { factories: new Set(), pmgs: new Set(), pms: new Set() };
-  for (const factory of store.project.factories) {
-    if (factory.key === originalKey) continue;
+  const others = [...store.project.factories, ...(store.project.monuments || [])];
+  for (const factory of others) {
+    if (factory.key === originalKey && store.project[kind.list].includes(factory)) continue;
     keys.factories.add(factory.key);
     for (const pmg of factory.pmgs.filter((entry) => entry.type === 'own')) {
       keys.pmgs.add(pmg.key);
@@ -230,6 +301,7 @@ function problems(factory) {
   if (cost && !KEY_PATTERN.test(cost) && !NUMBER_PATTERN.test(cost)) found.push('construction_invalid');
   for (const name of RAW_BLOCKS) if (!bracesBalanced(factory.blocks[name])) found.push('braces:' + name);
   for (const name of ['ai_value', 'extra']) if (!bracesBalanced(factory[name])) found.push('braces:' + name);
+  if (factory.history && !factory.location.state) found.push('history_state');
   if (!factory.pmgs.length) found.push('pmgs_missing');
   const seenPmgs = new Set();
   const seenPms = new Set();
@@ -268,6 +340,7 @@ function problemText(code) {
 
 function changed() {
   dirty = true;
+  syncSimpleKeys();
   renderPreview();
   refreshSidebar();
 }
@@ -289,10 +362,11 @@ const scriptArea = (get, set) => scriptBox(get, set, changed);
 // -------------------------------------------------------- switching factory
 
 async function edit(factory, key, isDirty = false) {
-  if (dirty && !(await confirmDialog(t('factory.discard_confirm'), t('company.discard')))) return;
+  if (dirty && !(await confirmDialog(kind.discardText(), t('company.discard')))) return;
   editing = modelOf(factory);
   originalKey = key;
   dirty = isDirty;
+  syncSimpleKeys();
   chosenPm.clear();
   clearConditionCache();
   renderLeft();
@@ -301,22 +375,24 @@ async function edit(factory, key, isDirty = false) {
 }
 
 function overrideFactory(factory) {
-  const existing = store.project.factories.find((f) => f.key === factory.key);
+  const existing = store.project[kind.list].find((f) => f.key === factory.key);
   if (existing) {
-    toast(t('factory.already_in_project'));
+    toast(kind.alreadyText());
     return edit(existing, existing.key);
   }
-  return edit({ ...factory, mode: 'override', names: {} }, null, true);
+  const item = { ...factory, mode: 'override', names: {} };
+  return edit(isMonumentPage() ? asMonument(item, factory) : item, null, true);
 }
 
 function copyFactory(factory) {
   const names = knownName(factory) ? { [language()]: factory.name } : {};
-  return edit({ ...factory, mode: 'new', key: freeKey('factories', `${factory.key}_copy`), names }, null, true);
+  const item = { ...factory, mode: 'new', key: freeKey('factories', `${factory.key}_copy`), names };
+  return edit(isMonumentPage() ? asMonument(item, factory) : item, null, true);
 }
 
 async function save() {
-  const result = await api.post('/api/project/factory',
-    { factory: editing, original_key: originalKey, keep_images: keptImages() });
+  const result = await api.post(`/api/project/${kind.name}`,
+    { [kind.name]: editing, original_key: originalKey, keep_images: keptImages() });
   if (result.errors.length) {
     toast(result.errors.map(problemText).join('\n'), 'error');
     return;
@@ -331,9 +407,10 @@ async function save() {
 // Remove a factory of the project; when it is the one being edited, start a new one.
 async function remove(factory) {
   const current = factory.key === originalKey;
-  const name = factoryName(current ? editing : factory);
+  const name = kind.displayName(current ? editing : factory);
   if (!(await confirmDialog(t('company.delete_confirm', { name }), t('company.delete')))) return;
-  setProject(await api.post('/api/project/factory/delete', { key: factory.key, keep_images: keptImages(current ? 'factory' : null) }));
+  setProject(await api.post(`/api/project/${kind.name}/delete`,
+    { key: factory.key, keep_images: keptImages(current ? kind.name : null) }));
   if (current) {
     dirty = false;
     await close();
@@ -346,7 +423,7 @@ async function remove(factory) {
 
 // Leave the editor for the start screen.
 async function close() {
-  if (dirty && !(await confirmDialog(t('factory.discard_confirm'), t('company.discard')))) return;
+  if (dirty && !(await confirmDialog(kind.discardText(), t('company.discard')))) return;
   editing = null;
   originalKey = null;
   dirty = false;
@@ -356,16 +433,19 @@ async function close() {
 
 const startFactory = () => run(() => edit(blankFactory(), null));
 
-editingImages.set('factory', () => {
-  if (!editing) return [];
-  const own = editing.pmgs.filter((entry) => entry.type === 'own');
-  return [editing.icon, editing.background, ...own.map((pmg) => pmg.texture),
+// Images of a building and its own groups and methods.
+function imagesOf(item) {
+  if (!item) return [];
+  const own = item.pmgs.filter((entry) => entry.type === 'own');
+  return [item.icon, item.background, ...own.map((pmg) => pmg.texture),
     ...own.flatMap((pmg) => pmg.pms.filter((pm) => pm.type === 'own').map((pm) => pm.texture))];
-});
+}
+editingImages.set('factory', () => imagesOf(editingOn('factory')));
+editingImages.set('monument', () => imagesOf(editingOn('monument')));
 
 // What the sidebar needs from this page.
 const sidebarEditor = {
-  kind: 'factory',
+  get kind() { return kind.name; },
   state: () => ({ key: originalKey, dirty }),
   open: (factory) => edit(factory, factory.key),
   remove,
@@ -387,7 +467,7 @@ function renderLeft() {
       h('h2', {}, t('company.editing')),
       h('button', { class: 'btn primary', onclick: () => run(save) }, t('editor.save'))),
     els.preview,
-    h('button', { class: 'btn new-item', onclick: startFactory }, t('factory.new')));
+    h('button', { class: 'btn new-item', onclick: startFactory }, kind.newLabel()));
   renderPreview();
   refreshSidebar();
 }
@@ -453,6 +533,7 @@ function renderPreview() {
   if (factory.mode === 'new' && !Object.values(factory.names).some(Boolean)) notes.push(t('note.no_name'));
   const group = store.index.building_groups.get(factory.building_group);
   if (factory.mode === 'new' && group && group.needs_resources) notes.push(t('factory.resource_note'));
+  if (isMonumentPage()) notes.push(...monumentNotes(factory));
   const filled = store.state.languages.filter((l) => factory.names[l.key]);
   const conditionChips = RAW_BLOCKS.filter((name) => factory.blocks[name].trim()).map((name) =>
     h('span', { class: 'chip', title: name }, `${t('fblock.title.' + name)} · ${countConditions(factory.blocks[name])}`));
@@ -460,7 +541,7 @@ function renderPreview() {
     h('div', { class: 'preview-art' },
       thumb(factory.background, 480, 'preview-background'),
       thumb(factory.icon, 128, 'preview-icon')),
-    h('h3', { class: 'preview-name' }, factoryName(factory)),
+    h('h3', { class: 'preview-name' }, kind.displayName(factory)),
     h('div', { class: 'preview-meta' },
       h('span', { class: 'company-key' }, factory.key || '—'),
       h('span', { class: 'badge' + (factory.mode === 'override' ? ' accent' : '') }, t('company.mode.' + factory.mode)),
@@ -472,7 +553,8 @@ function renderPreview() {
       factory.unlocking_technologies.length
         ? h('div', { class: 'chips' }, factory.unlocking_technologies.map((key) => objectChip('technologies', key)))
         : h('span', { class: 'muted' }, t('factory.no_technologies'))),
-    h('div', { class: 'preview-group' },
+    isMonumentPage() && monumentPreview(factory),
+    !(isMonumentPage() && factory.effects === 'simple') && h('div', { class: 'preview-group' },
       h('h4', {}, t('factory.pmgs')),
       factory.pmgs.length === 0 && h('span', { class: 'muted' }, t('common.none')),
       factory.pmgs.map((entry) => {
@@ -483,7 +565,7 @@ function renderPreview() {
           pmg && h('div', { class: 'chips' }, pmg.pms.map((pm) =>
             h('span', { class: 'chip' + (pm === first ? ' filled' : ''), title: pm.key }, entryName('pms', pm)))));
       })),
-    factory.pmgs.length > 0 && estimate(factory),
+    !isMonumentPage() && factory.pmgs.length > 0 && estimate(factory),
     conditionChips.length > 0 && h('div', { class: 'preview-group' },
       h('h4', {}, t('factory.conditions')), h('div', { class: 'chips' }, conditionChips)),
     h('div', { class: 'preview-group' },
@@ -523,7 +605,8 @@ const nameLabel = () => t('company.name', { language: languageName(language()) }
 function basicSection() {
   const factory = editing;
   const original = factory.mode === 'override' ? store.index.factories.get(factory.key) : null;
-  const options = store.data.building_groups.filter((g) => g.production || g.key === factory.building_group);
+  const options = store.data.building_groups.filter((g) => g.key === factory.building_group
+    || (isMonumentPage() ? MONUMENT_GROUPS.includes(g.key) : g.production));
   const group = h('select', {
     class: 'input',
     onchange: () => {
@@ -549,13 +632,13 @@ function basicSection() {
   return section(t('company.basic'), null,
     factory.mode === 'override' && h('div', { class: 'notice warn' },
       t('factory.override_note', { source: original ? sourceName(original.source) : '?' })),
-    field(t('company.key'), keyInput(factory, 'building_my_factory', changed),
+    field(t('company.key'), keyInput(factory, kind.placeholder, changed),
       factory.mode === 'override' ? null : t('factory.key_hint')),
     field(nameLabel(), nameInput(factory, knownName(original), changed),
       factory.mode === 'override' ? t('company.name_hint_override') : t('company.name_hint')),
-    field(t('factory.group'), group, t('factory.group_hint')),
+    field(t('factory.group'), group, isMonumentPage() ? t('monument.group_hint') : t('factory.group_hint')),
     factory.mode === 'new' && info && info.needs_resources && h('div', { class: 'notice warn' }, t('factory.resource_note')),
-    field(t('factory.city_type'), city, t('factory.city_type_hint')));
+    !isMonumentPage() && field(t('factory.city_type'), city, t('factory.city_type_hint')));
 }
 
 function imagesSection() {
@@ -831,9 +914,9 @@ function amountRows(pm, name, objectField, kind, label, startAmount, touch) {
     rows.length === 0 && h('span', { class: 'muted small' }, t('common.none')));
 }
 
-function modifierRows(pm, touch) {
+function modifierRows(pm, touch, label = t('factory.modifiers')) {
   const add = () => openPicker({
-    title: t('factory.modifiers'), selected: [],
+    title: label, selected: [],
     items: store.data.modifiers.map((m) => ({ key: m.key, name: m.name || m.key, sub: m.key })),
     onDone: (keys) => {
       pm.modifiers.push(...keys.map((key) => {
@@ -850,7 +933,7 @@ function modifierRows(pm, touch) {
     return select;
   };
   return h('div', { class: 'amounts' },
-    h('div', { class: 'row' }, h('span', { class: 'field-label' }, t('factory.modifiers')),
+    h('div', { class: 'row' }, h('span', { class: 'field-label' }, label),
       h('button', { class: 'btn small', onclick: add }, t('factory.add'))),
     h('p', { class: 'muted small' }, t('factory.modifiers_hint')),
     pm.modifiers.map((modifier, index) => {
@@ -1068,8 +1151,10 @@ function hasUnknown(item, keys) {
 }
 
 function settingsSection() {
+  const monument = isMonumentPage();
   return section(t('fset.title'), t('fset.hint'), scriptFields({
-    scope: 'building', fields: BUILDING_SCRIPT_FIELDS, groups: BUILDING_GROUPS,
+    scope: monument ? 'monument' : 'building', fields: monument ? monumentSettingFields() : BUILDING_SCRIPT_FIELDS,
+    groups: monument ? MONUMENT_GROUPS_OF_FIELDS : BUILDING_GROUPS,
     get: () => editing.extra,
     write: (text, redraw) => {
       editing.extra = text;
@@ -1086,10 +1171,10 @@ function advancedSection() {
     h('div', { class: 'script-field' },
       h('span', { class: 'field-label' }, t('factory.other_script')),
       h('p', { class: 'muted small' }, t('factory.extra_hint')),
-      unknownBox(editing, BUILDING_KEYS, redraw)));
+      unknownBox(editing, isMonumentPage() ? monumentKeys() : BUILDING_KEYS, redraw)));
 }
 
-const builders = {
+const FACTORY_BUILDERS = {
   basic: basicSection,
   images: imagesSection,
   unlock: unlockSection,
@@ -1100,15 +1185,35 @@ const builders = {
   advanced: advancedSection,
 };
 
+const MONUMENT_BUILDERS = {
+  basic: basicSection,
+  images: imagesSection,
+  location: locationSection,
+  models: modelsSection,
+  pmgs: effectsSection,
+  unlock: unlockSection,
+  conditions: conditionsSection,
+  ai: aiSection,
+  settings: settingsSection,
+  advanced: advancedSection,
+};
+
+const builders = new Proxy({}, {
+  get: (_target, name) => (isMonumentPage() ? MONUMENT_BUILDERS : FACTORY_BUILDERS)[name],
+  ownKeys: () => Reflect.ownKeys(isMonumentPage() ? MONUMENT_BUILDERS : FACTORY_BUILDERS),
+  getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+});
+
 function renderMiddle() {
   if (!editing) {
     // The start screen: nothing is being edited yet.
     fill(els.middle, h('div', { class: 'editor-start' },
-      h('button', { class: 'btn primary start-button', onclick: startFactory }, t('factory.new')),
+      h('button', { class: 'btn primary start-button', onclick: startFactory }, kind.newLabel()),
       h('p', { class: 'muted' }, t('editor.start_hint'))));
     return;
   }
   const scroll = els.middle.scrollTop;
+  for (const name of Object.keys(sections)) delete sections[name];
   for (const name of Object.keys(builders)) sections[name] = builders[name]();
   fill(els.middle,
     h('div', { class: 'editor-bar' },
@@ -1144,11 +1249,20 @@ function isProduction(factory) {
   return Boolean(group && group.production);
 }
 
+// Buildings of the monument page: monuments and skyscrapers.
+function isMonument(factory) {
+  return groupChain(factory.building_group).some((group) => MONUMENT_GROUPS.includes(group));
+}
+
+// The pages' buildings.
+const belongs = (factory) => (isMonumentPage() ? isMonument(factory) : isProduction(factory));
+
 function matchesFilters(factory) {
   const query = filters.query.trim().toLowerCase();
   if (query && !(factory.name || '').toLowerCase().includes(query) && !factory.key.toLowerCase().includes(query)) return false;
   if (filters.source && !factory.sources.includes(filters.source)) return false;
   if (filters.group && !groupChain(factory.building_group).includes(filters.group)) return false;
+  if (filters.region && regionOf(factory) !== filters.region) return false;
   if (filters.output && !goodsOf(factory).outputs.has(filters.output)) return false;
   if (filters.input && !goodsOf(factory).inputs.has(filters.input)) return false;
   return true;
@@ -1213,8 +1327,12 @@ function factoryDetails(factory) {
   const shown = shownVersion(factory);
   const picked = pickedPms(shown).map((entry) => entry && pmOf(entry)).filter(Boolean);
   const profit = sum(picked, (pm) => pmValue(pm).profit);
+  const monument = isMonumentPage();
   return h('div', { class: 'company-details' },
     factory.sources.length > 1 && versionPicker(factory),
+    monument && h('div', {}, h('span', { class: 'muted' }, `${t('monument.state')}: `),
+      stateOf(shown) ? nameOf('states', stateOf(shown)) : t('monument.anywhere')),
+    monument && effectLines(picked),
     h('div', {}, h('span', { class: 'muted' }, `${t('factory.group')}: `), nameOf('building_groups', shown.building_group),
       ` · ${t('factory.cost_short', { value: costText(shown.required_construction) })}`),
     shown.unlocking_technologies.length > 0 && h('div', { class: 'detail-chips' },
@@ -1225,12 +1343,12 @@ function factoryDetails(factory) {
       return h('div', {}, h('span', { class: 'muted' }, `${entryName('pmgs', entry)}: `),
         pmg ? pmg.pms.map((pm) => entryName('pms', pm)).join(', ') : t('factory.missing', { key: entry.key }));
     }),
-    picked.length > 0 && h('div', {}, h('span', { class: 'muted' }, `${t('factory.estimate_profit')}: `),
+    !monument && picked.length > 0 && h('div', {}, h('span', { class: 'muted' }, `${t('factory.estimate_profit')}: `),
       h('b', { class: profit > 0 ? 'good' : profit < 0 ? 'bad' : '' }, (profit > 0 ? '+' : '') + round(profit))),
     h('div', { class: 'muted small' }, `${sourceName(shown.source)} · ${shown.file}`),
     h('div', { class: 'row' },
       h('button', { class: 'btn', onclick: () => run(() => overrideFactory(shown)) }, t('company.override')),
-      h('button', { class: 'btn', onclick: () => run(() => copyFactory(shown)) }, t('factory.copy'))));
+      h('button', { class: 'btn', onclick: () => run(() => copyFactory(shown)) }, kind.copyLabel())));
 }
 
 function renderList() {
@@ -1269,7 +1387,7 @@ function renderRight() {
   const byName = (a, b) => a[1].localeCompare(b[1]);
   const count = (keysOf) => {
     const counts = new Map();
-    for (const factory of data.factories.filter(isProduction)) {
+    for (const factory of data.factories.filter(belongs)) {
       for (const key of keysOf(factory)) counts.set(key, (counts.get(key) || 0) + 1);
     }
     return counts;
@@ -1278,7 +1396,7 @@ function renderRight() {
   const sourceCounts = count((factory) => factory.sources);
   // Base game first, then the mods in load order, each building where it was first defined.
   const rank = new Map(data.sources.map((source, i) => [source.id, i]));
-  listed = data.factories.filter(isProduction).sort((a, b) => rank.get(a.sources[0]) - rank.get(b.sources[0]));
+  listed = data.factories.filter(belongs).sort((a, b) => rank.get(a.sources[0]) - rank.get(b.sources[0]));
   const sources = data.sources.filter((s) => sourceCounts.has(s.id))
     .map((s) => [s.id, `${sourceName(s.id)} (${sourceCounts.get(s.id)})`]);
   els.list = h('div', { class: 'company-list' });
@@ -1287,14 +1405,315 @@ function renderRight() {
     class: 'input', type: 'search', placeholder: t('company.search'), value: filters.query,
     oninput: debounce(() => { filters.query = search.value; listLimit = PAGE; renderList(); }, 150),
   });
+  const groupFilter = filterSelect('group', t('factory.filter_group'),
+    groupOptions(count((factory) => groupChain(factory.building_group))));
   els.right.replaceChildren(
-    h('div', { class: 'col-head' }, h('h2', {}, t('factory.existing')), els.count),
+    h('div', { class: 'col-head' }, h('h2', {}, kind.existing()), els.count),
     h('div', { class: 'filters' },
       search,
       filterSelect('source', t('company.filter_source'), sources),
-      filterSelect('group', t('factory.filter_group'), groupOptions(count((factory) => groupChain(factory.building_group)))),
-      filterSelect('output', t('factory.filter_output'), options(count((factory) => goodsOf(factory).outputs), 'goods')),
-      filterSelect('input', t('factory.filter_input'), options(count((factory) => goodsOf(factory).inputs), 'goods'))),
+      groupFilter,
+      isMonumentPage()
+        ? filterSelect('region', t('company.filter_region'),
+          options(count((factory) => (regionOf(factory) ? [regionOf(factory)] : [])), 'regions'))
+        : [filterSelect('output', t('factory.filter_output'), options(count((factory) => goodsOf(factory).outputs), 'goods')),
+          filterSelect('input', t('factory.filter_input'), options(count((factory) => goodsOf(factory).inputs), 'goods'))]),
     els.list);
   renderList();
+}
+
+// ------------------------------------------------------------------ monuments
+
+// The state region a building of the game is limited to (in its potential), or ''.
+function stateOf(building) {
+  if (building.location) return building.location.state;
+  const value = scriptValue(building.blocks.potential, 'state_region');
+  return typeof value === 'string' && value.startsWith('s:') ? value.slice(2) : '';
+}
+
+function regionOf(building) {
+  const state = store.index.states.get(stateOf(building));
+  return (state && state.region) || '';
+}
+
+// The default names of a monument's own group and method, as the base game's monuments have them.
+function defaultNames(kindOfList, key) {
+  const name = knownName(store.index[kindOfList].get(key));
+  return name ? { [language()]: name } : {};
+}
+
+// Methods the base game's monuments offer besides their own one (smaller or no effects).
+const SHARED_MONUMENT_PMS = ['pm_monument_prestige_only', 'pm_monument_no_effects'];
+
+// The group of a monument edited as a list of effects: its own method first, then shared ones
+// kept as they are (`others`, keys; by default the base game's). The own method is a copy of
+// `source` (a method of the game) when given.
+function simpleGroup(source, others = SHARED_MONUMENT_PMS.filter((key) => store.index.pms.has(key))) {
+  const copied = source ? structuredClone(Object.fromEntries(PM_FIELDS.map((name) => [name, source[name]]))) : {};
+  const pm = {
+    type: 'own', mode: 'new', key: '', names: defaultNames('pms', 'pm_default_building_eiffel_tower'),
+    texture: WONDER_TEXTURE, is_default: false, inputs: [], outputs: [], employment: [], unlocking_technologies: [],
+    unlocking_laws: [], modifiers: [], extra: 'is_hidden_when_unavailable = yes', ...copied,
+  };
+  return { type: 'own', mode: 'new', key: '', names: defaultNames('pmgs', 'pmg_base_building_eiffel_tower'),
+    texture: PMG_TEXTURE, extra: 'ai_selection = most_productive\nis_hidden_when_unavailable = yes',
+    pms: [pm, ...others.map((key) => ({ type: 'ref', key }))] };
+}
+
+// A new monument's own group and method are named after it.
+function syncSimpleKeys() {
+  if (!editing || !isMonumentPage() || editing.effects !== 'simple') return;
+  const pmg = editing.pmgs[0];
+  if (!pmg || pmg.type !== 'own' || pmg.mode !== 'new' || !pmg.pms[0] || pmg.pms[0].type !== 'own') return;
+  const base = (editing.key || 'building_new').replace(/^building_/, '');
+  pmg.key = `pmg_base_building_${base}`;
+  pmg.pms[0].key = `pm_default_building_${base}`;
+}
+
+// The group and first method of a game monument when it has one group of its own whose first
+// method nothing else uses (the base game's pattern); then it is edited as a list of effects,
+// and the group's other methods are kept as they are.
+function ownEffects(building) {
+  if (building.pmgs.length !== 1 || building.pmgs[0].type !== 'ref') return null;
+  const pmg = store.index.pmgs.get(building.pmgs[0].key);
+  if (!pmg || !pmg.pms.length) return null;
+  const pm = store.index.pms.get(pmg.pms[0].key);
+  const groupUsers = store.data.factories.filter((f) => f.pmgs.some((entry) => entry.key === pmg.key)).length;
+  const methodUsers = store.data.pmgs.filter((g) => g.pms.some((entry) => entry.key === pmg.pms[0].key)).length;
+  return pm && groupUsers <= 1 && methodUsers <= 1 ? { pmg, pm, others: pmg.pms.slice(1).map((entry) => entry.key) } : null;
+}
+
+// A game building opened on the monument page: `item` is it as a copy or override, `source` the
+// building as the game has it. Its state, locator and buildable move out of the script.
+function asMonument(item, source) {
+  const model = { ...item, blocks: { ...item.blocks } };
+  const state = stateOf(source);
+  if (state) model.blocks.potential = setScriptValue(model.blocks.potential, 'state_region', null);
+  const locator = scriptValue(model.extra, 'locator');
+  model.extra = setScriptValue(model.extra, 'locator', null);
+  if (item.mode === 'new') model.extra = setScriptValue(model.extra, 'buildable', null);
+  model.location = { state, x: null, z: null,
+    locator: item.mode === 'override' && typeof locator === 'string' ? locator : '' };
+  model.history = '';
+  const own = ownEffects(source);
+  model.effects = own ? 'simple' : 'full';
+  if (own && item.mode === 'override') {
+    model.pmgs = [{ type: 'own', mode: 'override', key: own.pmg.key, names: {}, texture: own.pmg.texture,
+      extra: own.pmg.extra, pms: [ownPm(own.pm.key, 'override'), ...own.others.map((key) => ({ type: 'ref', key }))] }];
+  } else if (own) {
+    model.pmgs = [{ ...simpleGroup(own.pm, own.others), texture: own.pmg.texture, extra: own.pmg.extra }];
+  }
+  return model;
+}
+
+// Map positions of the monuments of the game (by their locators).
+function monumentPositions() {
+  const byName = new Map(store.data.locators.map((locator) => [locator.key, locator]));
+  return store.data.factories.filter(isMonument).map((building) => {
+    const name = scriptValue(building.extra, 'locator');
+    const locator = typeof name === 'string' && byName.get(name);
+    return locator ? { key: building.key, name: building.name || building.key, x: locator.x, z: locator.z } : null;
+  }).filter(Boolean);
+}
+
+// Where the model of the monument in the editor stands: {x, z} or null.
+function currentPosition() {
+  const { location } = editing;
+  if (location.x !== null && location.x !== undefined) return { x: location.x, z: location.z };
+  const locator = location.locator && store.data.locators.find((l) => l.key === location.locator);
+  return locator ? { x: locator.x, z: locator.z } : null;
+}
+
+function monumentNotes(monument) {
+  const notes = [];
+  if (!monument.location.state) notes.push(t('monument.note_anywhere'));
+  else if (!currentPosition()) notes.push(t('monument.note_no_position'));
+  return notes;
+}
+
+// "Prestige +100" lines of the effects of methods.
+function effectLines(pms) {
+  const lines = pms.flatMap((pm) => [
+    ...pm.modifiers.map((m) => {
+      const info = store.index.modifiers.get(m.key);
+      const value = Number(m.value);
+      const text = Number.isNaN(value) ? m.value
+        : `${value > 0 ? '+' : ''}${info && info.percent ? `${Math.round(value * 10000) / 100}%` : value}`;
+      return `${nameOf('modifiers', m.key)} ${text}`;
+    }),
+    ...pm.employment.map((row) => `${nameOf('pop_types', row.pop)} ${row.amount}`),
+  ]);
+  return lines.length ? h('ul', { class: 'modifier-lines' }, lines.map((line) => h('li', {}, line))) : null;
+}
+
+function monumentPreview(monument) {
+  const position = currentPosition();
+  const simple = monument.effects === 'simple' && monument.pmgs[0] && monument.pmgs[0].pms[0];
+  return [
+    h('div', { class: 'preview-group' },
+      h('h4', {}, t('monument.location')),
+      h('div', {}, monument.location.state ? nameOf('states', monument.location.state) : t('monument.anywhere')),
+      monument.location.state && h('div', { class: 'muted small' }, position
+        ? t('monument.position_at', { x: Math.round(position.x), z: Math.round(position.z) }) : t('monument.position_none')),
+      monument.history && h('div', { class: 'muted small' }, t('monument.owner_at_start', { owner: nameOf('countries', monument.history) }))),
+    simple && h('div', { class: 'preview-group' },
+      h('h4', {}, t('monument.effects')),
+      effectLines([simple]) || h('span', { class: 'muted' }, t('monument.no_effects'))),
+  ];
+}
+
+function setPosition(state, x, z) {
+  Object.assign(editing.location, { state, x, z });
+  changed();
+  refresh('location');
+}
+
+function locationSection() {
+  const { location } = editing;
+  if (!locationMap || locationMapData !== store.data) {
+    locationMap = new StateMap({ onToggle: () => {}, onPoint: (state, x, z) => setPosition(state, x, z),
+      markerText: (count, names) => t('monument.map_monuments', { count, names }) });
+    locationMapData = store.data;
+  }
+  const others = monumentPositions().filter((point) => point.key !== editing.key);
+  const markers = new Map();
+  for (const building of store.data.factories.filter(isMonument)) {
+    const state = stateOf(building);
+    if (state) markers.set(state, [...(markers.get(state) || []), building.name || building.key]);
+  }
+  const position = currentPosition();
+  locationMap.showMarkers = false;
+  locationMap.setMarkers(markers);
+  locationMap.setSelected(location.state ? [location.state] : []);
+  locationMap.setPoints([...others.map((point) => ({ x: point.x, z: point.z, current: false })),
+    ...(position ? [{ ...position, current: true }] : [])]);
+  const owners = (store.data.state_owners[location.state] || []);
+  const canStart = editing.mode === 'new';
+  return section(t('monument.location'), t('monument.location_hint'),
+    locationMap.el,
+    h('div', { class: 'row' },
+      h('span', { class: 'field-label' }, t('monument.state')),
+      valueButton({ kind: 'states', title: t('monument.state'), placeholder: t('monument.anywhere'),
+        keys: location.state ? [location.state] : [],
+        onDone: ([state]) => {
+          if (!state || state === location.state) return;
+          Object.assign(location, { state, x: null, z: null });
+          changed();
+          refresh('location');
+        } }),
+      location.state && h('button', { class: 'btn small', onclick: () => {
+        Object.assign(location, { state: '', x: null, z: null });
+        editing.history = '';
+        changed();
+        refresh('location');
+      } }, t('monument.clear_state'))),
+    h('div', { class: 'muted' }, `${t('monument.position')}: `,
+      !location.state ? t('monument.position_anywhere')
+        : location.x !== null && location.x !== undefined ? t('monument.position_at', { x: Math.round(location.x), z: Math.round(location.z) })
+          : location.locator ? t('monument.position_kept', { name: location.locator }) : t('monument.position_none')),
+    canStart && h('div', { class: 'cond-block' },
+      h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: Boolean(editing.history), disabled: !location.state || !owners.length,
+          onchange: (event) => { editing.history = event.target.checked ? owners[0] : ''; changed(); refresh('location'); } }),
+        t('monument.history')),
+      h('p', { class: 'muted small' }, !location.state ? t('monument.history_need_state')
+        : !owners.length ? t('monument.history_no_owner') : t('monument.history_hint')),
+      editing.history && owners.length > 1 && (() => {
+        const select = h('select', { class: 'input', onchange: () => { editing.history = select.value; changed(); refresh('location'); } },
+          owners.map((tag) => h('option', { value: tag }, `${nameOf('countries', tag)} (${tag})`)));
+        select.value = editing.history;
+        return field(t('monument.history_owner'), select);
+      })(),
+      editing.history && owners.length === 1 && h('div', {}, t('monument.owner_at_start', { owner: nameOf('countries', owners[0]) }))));
+}
+
+const entities = () => [...new Set(['entity_constructed', 'entity_under_construction', 'entity_not_constructed']
+  .flatMap((key) => usedValues(buildingTexts(), key)))].sort();
+
+const MODEL_FIELDS = [
+  { key: 'entity_constructed', kind: 'entity', options: entities, hint: true },
+  { key: 'entity_under_construction', kind: 'entity', options: entities, hint: true },
+  { key: 'entity_not_constructed', kind: 'entity', options: entities, hint: true },
+  { key: 'city_gfx_interactions', kind: 'gfx', hint: true },
+  { key: 'meshes', kind: 'block', hint: true },
+];
+
+function modelsSection() {
+  return section(t('monument.models'), t('monument.models_hint'), scriptFields({
+    scope: 'models', fields: MODEL_FIELDS, get: () => editing.extra,
+    write: (text, redraw) => {
+      editing.extra = text;
+      changed();
+      if (redraw) refresh('models');
+      refresh('advanced');
+    },
+  }));
+}
+
+const MONUMENT_GROUPS_OF_FIELDS = ['misc', 'conditions'];
+
+// The other fields of a monument; buildable only for an override (a new one is buildable unless
+// it exists at the start).
+function monumentSettingFields() {
+  return [
+    flag('unique', false, { hint: true }),
+    flag('expandable', true),
+    flag('downsizeable', true),
+    ...(editing.mode === 'override' ? [flag('buildable', true)] : []),
+    { key: 'levels_per_mesh', kind: 'number', hint: true },
+    { key: 'terrain_manipulator', kind: 'select', options: () => usedValues(buildingTexts(), 'terrain_manipulator'), hint: true },
+    flag('enable_air_connection', false, { group: 'misc', hint: true }),
+    flag('statue', false, { group: 'misc', hint: true }),
+    { key: 'lens', group: 'misc', kind: 'key', pick: 'lenses', hint: true },
+    { key: 'ownership_type', group: 'misc', kind: 'select', options: OWNERSHIP, hint: true,
+      label: (option) => (OWNERSHIP.includes(option) ? `${t('fset.ownership.' + option)} (${option})` : option) },
+    { key: 'ai_nationalization_desire', group: 'misc', kind: 'number', hint: true },
+    { key: 'can_build_government', group: 'conditions', kind: 'conditions', kinds: STATE_KINDS, hint: true },
+    { key: 'can_build_private', group: 'conditions', kind: 'conditions', kinds: STATE_KINDS, hint: true },
+    { key: 'should_auto_expand', group: 'conditions', kind: 'conditions', kinds: [], hint: true },
+  ];
+}
+
+// Keys the monument forms edit (the text box shows the others).
+function monumentKeys() {
+  return new Set([...keysOf(monumentSettingFields()), ...keysOf(MODEL_FIELDS)]);
+}
+
+async function switchEffects(mode) {
+  if (mode === editing.effects) return;
+  if (!(await confirmDialog(t('monument.effects_switch_confirm'), t('monument.effects_switch')))) {
+    refresh('pmgs');
+    return;
+  }
+  editing.effects = mode;
+  editing.pmgs = mode === 'simple' ? [simpleGroup(null)] : [];
+  restructured();
+}
+
+function effectsSection() {
+  const simple = editing.effects === 'simple';
+  const pm = simple && editing.pmgs[0] && editing.pmgs[0].pms[0];
+  const touch = () => changed();
+  const choice = h('div', { class: 'radios' }, ['simple', 'full'].map((mode) => h('label', { class: 'check' },
+    h('input', { type: 'radio', name: 'effects-mode', checked: editing.effects === mode,
+      onchange: () => run(() => switchEffects(mode)) }),
+    mode === 'simple' ? t('monument.effects_simple') : t('monument.effects_full'))));
+  if (!simple) {
+    return section(t('monument.effects'), t('monument.effects_hint'), choice,
+      editing.pmgs.map((entry, index) => pmgCard(entry, index)),
+      editing.pmgs.length === 0 && h('p', { class: 'muted' }, t('factory.pmgs_empty')),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn', onclick: addRefPmgs }, t('factory.add_pmg_ref')),
+        h('button', { class: 'btn', onclick: addOwnPmg }, t('factory.add_pmg_own'))));
+  }
+  if (!pm || pm.type !== 'own') {
+    return section(t('monument.effects'), null, choice, h('p', { class: 'notice warn' }, t('monument.effects_broken')));
+  }
+  const others = editing.pmgs[0].pms.slice(1);
+  return section(t('monument.effects'), t('monument.effects_hint'), choice,
+    editing.pmgs[0].mode === 'override' && h('div', { class: 'notice warn small' }, t('monument.effects_override')),
+    modifierRows(pm, touch, t('monument.effect_list')),
+    amountRows(pm, 'employment', 'pop', 'pop_types', t('factory.employment'), '100', touch),
+    others.length > 0 && h('p', { class: 'muted small' },
+      t('monument.effects_others', { names: others.map((entry) => entryName('pms', entry)).join(', ') })));
 }

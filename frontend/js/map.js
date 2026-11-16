@@ -59,6 +59,7 @@ async function buildMap() {
   ]);
   // Province colours must arrive unchanged, so no colour management.
   const bitmap = await createImageBitmap(blob, { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  const fullHeight = bitmap.height;  // map positions (locators) count from the bottom of the full map
   const width = Math.round(bitmap.width / SHRINK);
   const height = Math.round(bitmap.height / SHRINK);
   const layer = document.createElement('canvas');
@@ -124,7 +125,7 @@ async function buildMap() {
   ctx.putImageData(image, 0, 0);
 
   return {
-    width, height, layer, ctx, index, border, colors, box, states,
+    width, height, fullHeight, layer, ctx, index, border, colors, box, states,
     keyIndex: new Map(states.map((state, i) => [state.key, i])),
     centers: sums.map((s) => (s[2] ? [s[0] / s[2], s[1] / s[2]] : null)),
     painted: new Map(),  // state index -> 'selected' | 'hover' | 'selected-hover'
@@ -154,10 +155,16 @@ function paintState(map, i, selected, hover) {
   map.ctx.putImageData(image, x0, y0);
 }
 
-// The map widget. `onToggle(stateKey)` is called when a land state is clicked.
+// The map widget. `onToggle(stateKey)` is called when a land state is clicked; with `onPoint`,
+// onPoint(stateKey, x, z) is called instead, with the game's map position of the click (as in
+// map locators: x from the left, z from the bottom of the full map).
+// `markerText(count, names)`: the tooltip line for the markers of a state.
 export class StateMap {
-  constructor({ onToggle }) {
+  constructor({ onToggle, onPoint = null, markerText = null }) {
     this.onToggle = onToggle;
+    this.onPoint = onPoint;
+    this.markerText = markerText || ((count, names) => t('map.headquarters', { count, names }));
+    this.points = [];          // [{x, z, current}] map positions drawn as pins
     this.selected = new Set();
     this.markers = new Map();  // state key -> names of companies headquartered there
     this.showMarkers = true;
@@ -217,6 +224,11 @@ export class StateMap {
 
   setMarkers(markers) {
     this.markers = markers;
+    this.draw();
+  }
+
+  setPoints(points) {
+    this.points = points;
     this.draw();
   }
 
@@ -321,8 +333,14 @@ export class StateMap {
       const moved = drag.moved;
       drag = null;
       if (moved) return;
-      const state = this.stateAt(...position(event));
-      if (state >= 0 && !this.map.states[state].sea) this.onToggle(this.map.states[state].key);
+      const [px, py] = position(event);
+      const state = this.stateAt(px, py);
+      if (state < 0 || this.map.states[state].sea) return;
+      const key = this.map.states[state].key;
+      if (!this.onPoint) return this.onToggle(key);
+      const x = (this.x + px / this.scale) * SHRINK;
+      const y = (this.y + py / this.scale) * SHRINK;
+      this.onPoint(key, Math.round(x * 100) / 100, Math.round((this.map.fullHeight - y) * 100) / 100);
     });
     canvas.addEventListener('pointercancel', () => { drag = null; });
     canvas.addEventListener('pointerleave', () => this.setHover(-1));
@@ -346,7 +364,7 @@ export class StateMap {
     if (info && info.region) lines.push(h('span', { class: 'muted' }, nameOf('regions', info.region)));
     if (companies.length) {
       const shown = companies.slice(0, 6).join(', ') + (companies.length > 6 ? ` +${companies.length - 6}` : '');
-      lines.push(h('span', {}, t('map.headquarters', { count: companies.length, names: shown })));
+      lines.push(h('span', {}, this.markerText(companies.length, shown)));
     }
     this.tip.replaceChildren(...lines);
     this.tip.hidden = false;
@@ -387,5 +405,22 @@ export class StateMap {
       }
     }
     for (const key of this.selected) dot(key, 4.5, '#fff3d0');
+    // pins at map positions; the current one last, so it is on top
+    for (const point of [...this.points].sort((a, b) => Number(a.current) - Number(b.current))) {
+      const sx = (point.x / SHRINK - this.x) * scale;
+      const sy = ((map.fullHeight - point.z) / SHRINK - this.y) * scale;
+      const size = (point.current ? 7 : 3.5) * ratio;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy - size);
+      ctx.lineTo(sx + size, sy);
+      ctx.lineTo(sx, sy + size);
+      ctx.lineTo(sx - size, sy);
+      ctx.closePath();
+      ctx.fillStyle = point.current ? '#d9a94a' : 'rgba(255, 255, 255, 0.85)';
+      ctx.fill();
+      ctx.lineWidth = ratio * (point.current ? 1.5 : 1);
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+      ctx.stroke();
+    }
   }
 }

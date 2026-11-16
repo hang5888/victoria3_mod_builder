@@ -13,6 +13,7 @@ from .companies import LANGUAGE_PATTERN, company_to_script, empty_company
 from .factories import (factory_to_script, fill_factory, modifier_texts, own_pmgs, own_pms, pm_to_script,
                         pmg_to_script)
 from .localization import write_loc_file
+from .monuments import fill_monument, history_script, locators_script, monument_to_script
 from .mods import PROJECT_FILE, discover_mods
 
 FORMAT = 1
@@ -65,7 +66,7 @@ def create_project(local_mod_dir, name, game_version):
     (folder / ".metadata" / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     project = {"tool": "vic-mod-builder", "format": FORMAT, "name": name, "slug": folder.name,
-               "companies": [], "factories": [], "images": [], "generated_files": []}
+               "companies": [], "factories": [], "monuments": [], "images": [], "generated_files": []}
     save_project(folder, project)
     return str(folder)
 
@@ -82,6 +83,7 @@ def load_project(project_dir):
     project["companies"] = [{**empty_company(), **c, "blocks": {**empty_company()["blocks"], **c.get("blocks", {})}}
                             for c in project.get("companies", [])]
     project["factories"] = [fill_factory(f) for f in project.get("factories", [])]
+    project["monuments"] = [fill_monument(m) for m in project.get("monuments", [])]
     return project
 
 
@@ -181,10 +183,10 @@ def used_images(project):
     used = set()
     for company in project["companies"]:
         used.update((company.get("icon"), company.get("background")))
-    for factory in project.get("factories", []):
-        used.update((factory.get("icon"), factory.get("background")))
-    used.update(item.get("texture") for item in [*own_pmgs(project.get("factories", [])),
-                                                 *own_pms(project.get("factories", []))])
+    buildings = [*project.get("factories", []), *project.get("monuments", [])]
+    for building in buildings:
+        used.update((building.get("icon"), building.get("background")))
+    used.update(item.get("texture") for item in [*own_pmgs(buildings), *own_pms(buildings)])
     return used
 
 
@@ -219,6 +221,22 @@ def save_project(project_dir, project, modifier_templates=lambda lang: None, kee
     _write_names(root, slug, "buildings", [*factories, *groups, *methods], generated,
                  lambda item, lang: (modifier_texts(item, lang, modifier_templates(lang))
                                      if item["key"] in building_keys and "pmgs" in item else {}))
+
+    monuments = project.get("monuments", [])
+    groups, methods = own_pmgs(monuments), own_pms(monuments)
+    _write_script(root, f"common/buildings/zzz_{slug}_monuments.txt",
+                  [monument_to_script(m, slug) for m in monuments], generated)
+    _write_script(root, f"common/production_method_groups/zzz_{slug}_monuments.txt",
+                  [pmg_to_script(g) for g in groups], generated)
+    _write_script(root, f"common/production_methods/zzz_{slug}_monuments.txt",
+                  [pm_to_script(m) for m in methods], generated)
+    # map positions of the monuments' models, and the ones that exist when the game starts
+    _write_script(root, f"gfx/map/map_object_data/zzz_{slug}_monuments.txt", locators_script(monuments, slug), generated)
+    _write_script(root, f"common/history/buildings/zzz_{slug}_monuments.txt", history_script(monuments), generated)
+    monument_keys = {m["key"] for m in monuments}
+    _write_names(root, slug, "monuments", [*monuments, *groups, *methods], generated,
+                 lambda item, lang: (modifier_texts(item, lang, modifier_templates(lang))
+                                     if item["key"] in monument_keys and "pmgs" in item else {}))
 
     # Imported images: pack the used ones, drop the others.
     used = used_images(project)
