@@ -10,7 +10,7 @@
 | 自定義工廠 | [mod_types/factory.md](mod_types/factory.md) | 初版已實作 |
 | 奇觀 | [mod_types/monument.md](mod_types/monument.md) | 初版已實作 |
 | 法律 | [mod_types/law.md](mod_types/law.md) | 初版已實作 |
-| 國家開局 | [mod_types/country_start.md](mod_types/country_start.md) | 規格撰寫中 |
+| 國家開局 | [mod_types/country_start.md](mod_types/country_start.md) | 規格已完成，尚未實作 |
 | 其他類型 | 待規劃 | |
 
 ## 1. 專案概述
