@@ -177,7 +177,7 @@ ideology_paternalistic = {
 
 - 遊戲裡沒有「預設法律」這個欄位。國家的開局歷史沒有設定某一組的法律時，用這一組最先讀到的法律（原版英國沒設定的 4 組都是這樣，例如勞動者權益用「無勞動者權利」）。看板上標「預設」的就是這條。
 - 原版各國的開局法律寫在 `common/history/countries/` 的 `activate_law`（450 個檔案，全部直接寫在 `c:TAG` 底下），大多經由 `effect_starting_politics_traditional` 等腳本效果；腳本效果裡只用到「是否為部落國家」（國家定義的 `country_type`）與「國教是否為伊斯蘭」兩種條件，所以可以算出每個國家實際的開局法律。
-- `common/history/global/` 的檔案在所有開局歷史的最後執行（原版檔案的註解），可以用 `every_country = { activate_law = ... }` 蓋過各國的設定；你啟用的大型模組 2932134122 就是這樣寫。
+- `common/history/global/` 的檔案在所有開局歷史的最後執行（原版檔案的註解），可以用 `every_country = { activate_law = ... }` 蓋過各國的設定；工作坊的大型模組 2932134122（Better Politics Mod）就是這樣寫。
 - 要讓一條新法律成為預設，可以把它寫在比原版更早讀取的法律檔（例如 `00_00_` 開頭）；讀取順序要在遊戲裡確認。
 - 開局歷史的 `activate_law` 不檢查顯示條件、頒布條件和解鎖科技：限定的法律（見 1.3）也會被設上。
 
