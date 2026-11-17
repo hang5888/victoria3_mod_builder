@@ -380,6 +380,9 @@ function typesCard() {
       typeCard('law', t('home.type.law'), t('home.type.law_hint'),
         find(data ? data.building_backgrounds : [], 'government'), find(data ? data.law_icons : [], 'monarchy'),
         (counts.laws || []).length),
+      typeCard('country', t('home.type.country'), t('home.type.country_hint'),
+        find(data ? data.backgrounds : [], 'comp_illu_trade'), find(data ? data.law_icons : [], 'monarchy'),
+        (counts.country_starts || []).length),
       h('div', { class: 'type-card planned' },
         h('div', { class: 'type-art' }, h('span', { class: 'type-plus' }, '+')),
         h('div', { class: 'type-body' }, h('b', {}, t('home.type.more')), h('span', {}, t('home.type.planned'))))));

@@ -60,7 +60,11 @@ class Localization:
         value = self.raw(key)
         if value is None:
             return key if default is None else default
-        return self.clean(value) or key
+        text = self.clean(value)
+        if not text and self.fallback is not None:
+            # only script (as a mod's [GetCustom(...)] name): the fallback language's text says more
+            return self.fallback.name(key, default)
+        return text or key
 
     def clean(self, text, depth=0):
         if depth < 4:

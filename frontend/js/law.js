@@ -129,11 +129,11 @@ function renderPage() {
 // ----------------------------------------------------------------- helpers
 
 const projectLaws = () => store.project.laws || [];
-const projectGroups = () => store.project.law_groups || [];
+export const projectGroups = () => store.project.law_groups || [];
 
 // A law group by its key, the game's or a new one of the mod, in the shape of the game's data
 // (`mine`: the mod's group); undefined when there is none.
-function groupOf(key) {
+export function groupOf(key) {
   const game = store.index.law_groups.get(key);
   if (game) return game;
   const mine = projectGroups().find((group) => group.key === key);
@@ -148,7 +148,7 @@ function keyTaken(key) {
 }
 
 // The other laws of a group: the game's (or the mod's version of them), then the mod's new ones.
-function groupRows(group) {
+export function groupRows(group) {
   const mine = new Map(projectLaws().map((law) => [law.key, law]));
   const rows = store.data.laws.filter((law) => law.group === group)
     .map((game) => ({ key: game.key, game, mine: mine.get(game.key) || null }));
@@ -161,18 +161,18 @@ function groupRows(group) {
   return rows;
 }
 
-const rowLaw = (row) => row.mine || row.game;
+export const rowLaw = (row) => row.mine || row.game;
 
 // Name of a law by its key: the mod's law, else the game's.
 function lawNameOf(key) {
   const mine = projectLaws().find((law) => law.key === key);
   return mine ? lawName(mine) : nameOf('laws', key);
 }
-const rowName = (row) => (row.mine ? lawName(row.mine) : row.game.name || row.game.key);
+export const rowName = (row) => (row.mine ? lawName(row.mine) : row.game.name || row.game.key);
 
 // The law the game uses for countries whose history sets none: the group's first law. In a new
 // group of the mod that is the first law the mod made in it (the laws are written in that order).
-function defaultOf(group) {
+export function defaultOf(group) {
   const first = store.data.laws.find((law) => law.group === group && law.default)
     || projectLaws().find((law) => law.group === group);
   return first ? first.key : '';
@@ -201,7 +201,7 @@ function stances(law) {
 
 // Who can see a law, from its visibility conditions: "only Japan", "only Japanese culture", or just
 // that it has conditions. null when every country sees it. `title`: the whole condition script.
-function lawLimit(law) {
+export function lawLimit(law) {
   const text = law.blocks.is_visible.trim();
   if (!text) return null;
   const model = readConditions(text, ['country', 'culture']);
@@ -218,7 +218,7 @@ function lawLimit(law) {
 }
 
 // Who a law group is for: a social hierarchy (as the caste system), and its enabling conditions.
-function groupLimits(group) {
+export function groupLimits(group) {
   if (!group) return [];
   return [
     group.hierarchy && { text: t('law.limit_hierarchy', { name: group.hierarchy_name || group.hierarchy }),
@@ -227,7 +227,7 @@ function groupLimits(group) {
   ].filter(Boolean);
 }
 
-const limitBadge = (limit) => h('span', { class: 'badge limit', title: limit.title }, limit.text);
+export const limitBadge = (limit) => h('span', { class: 'badge limit', title: limit.title }, limit.text);
 
 function stanceLabel(score) {
   if (score > 0) return { text: t('law.stance_approve', { score: `+${score}` }), tone: 'good' };

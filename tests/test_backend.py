@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backend import project  # noqa: E402
+from backend import countries, project  # noqa: E402
 from backend.companies import (company_from_block, company_to_script, empty_company,  # noqa: E402
                                normalize_company, validate_company)
 from backend.factories import (factory_from_block, factory_to_script, modifier_texts,  # noqa: E402
@@ -508,6 +508,272 @@ class LawGroupTest(unittest.TestCase):
                 normalize_law_group({"key": "lawgroup_x", **bad})
 
 
+HISTORY = """\
+COUNTRIES = {
+	c:TST ?= {
+		set_next_election_date = 1836.2.1
+
+		ig:ig_intelligentsia ?= {
+			add_ruling_interest_group = yes
+		}
+		ig:ig_devout ?= {
+			add_ruling_interest_group = yes
+			add_ideology = ideology_moralist # keeps its ideology
+		}
+
+		effect_starting_technology_tier_1_tech = yes
+		add_technology_researched = labor_movement # had it early
+
+		set_tax_level = medium
+		add_taxed_goods = g:liquor
+
+		effect_starting_politics_traditional = yes
+		activate_law = law_type:law_monarchy # the crown
+		activate_law = law_type:law_wealth_voting
+
+		set_institution_investment_level = {
+			institution = institution_schools
+			level = 3
+		}
+		add_journal_entry = { type = je_test }
+	}
+}
+"""
+
+POPULATION = "POPULATION = {\n\tc:TST ?= {\n\t\teffect_starting_pop_wealth_high = yes\n\t}\n}\n"
+GOVERNMENT = ("GOVERNMENT = {\n\tc:TST ?= {\n\t\tpy:liberal_party ?= {\n\t\t\tset_ruling_party = yes\n"
+              "\t\t\tadd_momentum = 0.5\n\t\t}\n\t}\n}\n")
+DEFINITION = "TST = {\n\tcolor = hsv{ 0.5 0.5 0.5 } # teal\n\tcountry_type = recognized\n\ttier = kingdom\n" \
+             "\tcultures = { british }\n\tcapital = STATE_TEST\n}\n"
+COUNTRY_LAWS = {"law_monarchy": "lawgroup_governance_principles", "law_presidential_republic": "lawgroup_governance_principles",
+                "law_wealth_voting": "lawgroup_distribution_of_power", "law_autocracy": "lawgroup_distribution_of_power",
+                "law_no_workers_rights": "lawgroup_labor_rights", "law_worker_protections": "lawgroup_labor_rights"}
+
+
+class FakeStartBase:
+    """The files in effect the country starts are written from."""
+
+    def __init__(self, files):
+        self.texts = files  # game-relative path -> text
+
+    def files(self, kind, tag):
+        folder = {"countries": "common/history/countries", "population": "common/history/population",
+                  "governments": "common/history/governments"}[kind]
+        return [rel for rel, text in self.texts.items() if rel.startswith(folder + "/") and f"c:{tag} " in text]
+
+    def text(self, rel):
+        return self.texts.get(rel)
+
+    def law_group(self, law):
+        return COUNTRY_LAWS.get(law, "")
+
+    def ruling(self, tag):
+        return ["ig_intelligentsia", "ig_devout"] if tag == "TST" else []
+
+    def definition(self, tag):
+        if tag != "TST":
+            return None
+        return DEFINITION[DEFINITION.index("{"):].rstrip()
+
+
+def country_base():
+    return FakeStartBase({"common/history/countries/tst - test.txt": HISTORY,
+                          "common/history/population/tst - test.txt": POPULATION,
+                          "common/history/governments/tst - test.txt": GOVERNMENT})
+
+
+def sample_start(**changes):
+    start = countries.empty_start("TST")
+    start.update(changes)
+    return countries.normalize_start(start)
+
+
+class CountryStartTest(unittest.TestCase):
+    def test_colors(self):
+        self.assertEqual(countries.parse_color(parse("c = { 147 130 110 }").get("c")), [147, 130, 110])
+        self.assertEqual(countries.parse_color(parse("c = rgb{ 10 20 30 }").get("c")), [10, 20, 30])
+        self.assertEqual(countries.parse_color(parse("c = hsv{ 0 1 1 }").get("c")), [255, 0, 0])
+        self.assertEqual(countries.parse_color(parse("c = hsv360{ 120 100 50 }").get("c")), [0, 128, 0])
+        self.assertIsNone(countries.parse_color(parse("c = { 1 2 }").get("c")))
+
+    def test_read_history(self):
+        scope = countries.scope_blocks(parse(HISTORY), "COUNTRIES")
+        self.assertEqual([tag for tag, _entry in scope], ["TST"])
+        history = countries.read_history(countries.empty_history(), scope[0][1].value)
+        self.assertEqual(history["law_steps"], [{"effect": "effect_starting_politics_traditional"},
+                                                {"law": "law_monarchy"}, {"law": "law_wealth_voting"}])
+        self.assertEqual(history["ruling"], ["ig_intelligentsia", "ig_devout"])
+        self.assertEqual((history["tech_tier"], history["techs"]), (1, ["labor_movement"]))
+        self.assertEqual((history["tax_level"], history["taxed_goods"]), ("medium", ["liquor"]))
+        self.assertEqual(history["institutions"], [{"institution": "institution_schools", "level": 3}])
+        self.assertEqual(history["election"], "1836.2.1")
+        self.assertEqual(history["extra"], "add_journal_entry = { type = je_test }")
+        definition = countries.definition_from_block(parse(DEFINITION).get("TST"))
+        self.assertEqual((definition["tier"], definition["cultures"], definition["capital"]),
+                         ("kingdom", ["british"], "STATE_TEST"))
+
+    def test_preset_conditions(self):
+        triggers = {"country_is_islamic": parse("t = { OR = { country_has_state_religion = rel:sunni } }").get("t")}
+        effect = parse("""e = {
+            if = { limit = { country_is_islamic = yes } activate_law = law_type:law_a }
+            else = { activate_law = law_type:law_b }
+            activate_law = law_type:law_c
+            if = { limit = { is_country_type = decentralized } activate_law = law_type:law_d }
+        }""").get("e")
+        steps = countries.effect_steps(effect, triggers.get)
+        islamic = {"all": [{"all": [{"any": [{"religion": ["sunni"]}]}]}]}
+        self.assertEqual(steps, [
+            {"law": "law_a", "cond": islamic}, {"law": "law_b", "cond": {"not": islamic}},
+            {"law": "law_c", "cond": None}, {"law": "law_d", "cond": {"all": [{"type": "decentralized"}]}}])
+
+    def test_patch_history(self):
+        start = sample_start(laws={"lawgroup_governance_principles": "law_presidential_republic",
+                                   "lawgroup_labor_rights": "law_worker_protections"},
+                             tax_level="high", taxed_goods=["liquor", "tea"], ruling=["ig_devout", "ig_industrialists"],
+                             ig_names={"ig_devout": {"english": "The Church"}}, election="")
+        texts = countries.write_starts([start], country_base(), "mymod")
+        self.assertEqual(sorted(texts), ["common/history/countries/tst - test.txt"])
+        text = texts["common/history/countries/tst - test.txt"]
+        block = parse(text).get("COUNTRIES").get("c:TST")
+        keys = [e.key for e in block.entries]
+        # the law of the group is replaced where it was; a group the history did not set comes after the laws
+        self.assertIn("activate_law = law_type:law_presidential_republic\n", text)
+        self.assertNotIn("law_monarchy", text)
+        laws = [e.value for e in block.entries if e.key == "activate_law"]
+        self.assertEqual(laws, ["law_type:law_presidential_republic", "law_type:law_wealth_voting",
+                                "law_type:law_worker_protections"])
+        self.assertLess(keys.index("effect_starting_politics_traditional"), keys.index("activate_law"))
+        self.assertEqual(block.get("set_tax_level"), "high")
+        self.assertEqual([e.value for e in block.entries if e.key == "add_taxed_goods"], ["g:liquor", "g:tea"])
+        self.assertNotIn("set_next_election_date", keys)
+        # ruling interest groups: one left, one kept (with its ideology), one new; the new name
+        self.assertNotIn("ig:ig_intelligentsia", keys)
+        devout = block.get("ig:ig_devout")
+        self.assertEqual([(e.key, e.value) for e in devout.entries], [
+            ("add_ruling_interest_group", "yes"), ("add_ideology", "ideology_moralist"),
+            ("set_interest_group_name", "mymod_tst_ig_devout_name")])
+        self.assertEqual(block.get("ig:ig_industrialists").get("add_ruling_interest_group"), "yes")
+        # what was not changed stays as it was, comments too
+        self.assertIn("add_technology_researched = labor_movement # had it early", text)
+        self.assertIn("\t\tadd_journal_entry = { type = je_test }\n\t}\n}", text)
+        self.assertEqual(block.get("set_institution_investment_level").get("level"), "3")
+
+    def test_patch_other_parts(self):
+        start = sample_start(tech_tier=4, techs=[], institutions=[], extra="add_modifier = { name = x }",
+                             wealth="low", literacy="middling", ruling_party="conservative_party")
+        texts = countries.write_starts([start], country_base(), "mymod")
+        block = parse(texts["common/history/countries/tst - test.txt"]).get("COUNTRIES").get("c:TST")
+        keys = [e.key for e in block.entries]
+        self.assertIn("effect_starting_technology_tier_4_tech", keys)
+        self.assertNotIn("effect_starting_technology_tier_1_tech", keys)
+        self.assertNotIn("add_technology_researched", keys)
+        self.assertNotIn("set_institution_investment_level", keys)
+        self.assertNotIn("add_journal_entry", keys)
+        self.assertEqual(block.get("add_modifier").get("name"), "x")
+        population = parse(texts["common/history/population/tst - test.txt"]).get("POPULATION").get("c:TST")
+        self.assertEqual([e.key for e in population.entries],
+                         ["effect_starting_pop_wealth_low", "effect_starting_pop_literacy_middling"])
+        government = parse(texts["common/history/governments/tst - test.txt"]).get("GOVERNMENT").get("c:TST")
+        self.assertEqual([(e.key, [(s.key, s.value) for s in e.value.entries]) for e in government.entries], [
+            ("py:liberal_party", [("add_momentum", "0.5")]),
+            ("py:conservative_party", [("set_ruling_party", "yes")])])
+
+    def test_country_without_history(self):
+        start = countries.normalize_start({"key": "NEW", "laws": {"lawgroup_labor_rights": "law_worker_protections"},
+                                           "tax_level": "low", "wealth": "medium", "ruling_party": "liberal_party"})
+        texts = countries.write_starts([start], country_base(), "mymod")
+        self.assertEqual(sorted(texts), ["common/history/countries/zzz_mymod_countries.txt",
+                                         "common/history/governments/zzz_mymod_governments.txt",
+                                         "common/history/population/zzz_mymod_population.txt"])
+        block = parse(texts["common/history/countries/zzz_mymod_countries.txt"]).get("COUNTRIES").get("c:NEW")
+        self.assertEqual([(e.key, e.value) for e in block.entries], [
+            ("activate_law", "law_type:law_worker_protections"), ("set_tax_level", "low")])
+
+    def test_definition_and_global_laws(self):
+        script = countries.definition_script("TST", country_base().definition("TST"),
+                                             {"color": [1, 2, 3], "tier": "empire", "religion": "catholic"})
+        entry = parse(script).entries[0]
+        self.assertEqual(entry.key, "REPLACE_OR_CREATE:TST")
+        self.assertEqual([(e.key, e.value if isinstance(e.value, str) else e.value.items()) for e in entry.value.entries], [
+            ("color", ["1", "2", "3"]), ("country_type", "recognized"), ("tier", "empire"), ("cultures", ["british"]),
+            ("capital", "STATE_TEST"), ("religion", "catholic")])
+        mine = sample_start(laws={"lawgroup_labor_rights": "law_no_workers_rights",
+                                  "lawgroup_governance_principles": "law_monarchy"})
+        script = countries.global_laws_script({"lawgroup_labor_rights": "law_worker_protections"}, [mine])
+        root = parse(script).get("GLOBAL")
+        self.assertEqual(root.get("every_country").get("activate_law"), "law_type:law_worker_protections")
+        # countries the mod set a law of the group for keep theirs; other groups are not repeated
+        self.assertEqual([(e.key, e.value) for e in root.get("c:TST").entries],
+                         [("activate_law", "law_type:law_no_workers_rights")])
+        self.assertIsNone(countries.global_laws_script({}, [mine]))
+
+    def test_normalize_and_validate(self):
+        game = {"countries": {"TST"}, "laws": COUNTRY_LAWS, "groups": set(COUNTRY_LAWS.values()),
+                "goods": {"liquor", "tea"}, "techs": {"labor_movement"}, "igs": {"ig_devout"},
+                "institutions": {"institution_schools"}, "parties": {"liberal_party"}, "cultures": {"british"},
+                "states": {"STATE_TEST"}, "religions": {"catholic"}, "hierarchies": set()}
+        self.assertEqual(countries.validate_start(sample_start(tax_level="high", wealth="low"), game), [])
+        bad = sample_start(laws={"lawgroup_labor_rights": "law_monarchy"}, tax_level="huge", wealth="rich",
+                           taxed_goods=["gold"], tariffs=[{"goods": "tea", "level": "free"}],
+                           institutions=[{"institution": "institution_schools", "level": 9}], techs=["x"],
+                           ruling=["ig_landowners"], ruling_party="party", extra="a = {",
+                           definition={"tier": "huge", "cultures": [], "capital": "STATE_X"})
+        self.assertEqual(countries.validate_start(bad, game), [
+            "law", "tier", "cultures", "capital", "tax_level", "wealth", "goods", "tariffs", "institutions",
+            "techs", "igs", "ruling_party", "braces:extra"])
+        self.assertEqual(countries.validate_start(sample_start(key="ZZZ"), game), ["country_unknown"])
+        for raw in ({"key": "../x"}, {"key": "TST", "laws": {"a b": "c"}}, {"key": "TST", "election": "soon"},
+                    {"key": "TST", "definition": {"color": "red"}}, {"key": "TST", "tech_tier": 9}):
+            with self.assertRaises(ValueError):
+                countries.normalize_start(raw)
+        everyone = countries.normalize_start({"key": "x", "mode": "all", "tax_level": "high",
+                                              "laws": {"lawgroup_labor_rights": "law_worker_protections"}})
+        self.assertEqual((everyone["key"], everyone["tax_level"]), ("*", None))
+        self.assertEqual(countries.validate_start(everyone, game), [])
+        self.assertTrue(countries.is_empty_start(sample_start()))
+        self.assertFalse(countries.is_empty_start(sample_start(ruling_party="")))  # "no ruling party" is a change
+        self.assertFalse(countries.is_empty_start(everyone))
+
+    def test_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            files = {
+                "game/common/history/countries/tst - test.txt": HISTORY,
+                "game/common/history/population/tst - test.txt": POPULATION,
+                "mod/common/history/governments/tst - test.txt": GOVERNMENT,
+                "game/common/history/pops/00_pops.txt":
+                    "POPS = { s:STATE_TEST = { region_state:TST = { create_pop = { culture = a size = 1500 } "
+                    "create_pop = { culture = b size = 500 } } } }\n",
+                "game/common/history/buildings/00_buildings.txt":
+                    "BUILDINGS = { s:STATE_TEST = { region_state:TST = { create_building = { building = x } } } }\n",
+                "game/common/history/characters/tst.txt": "CHARACTERS = { c:TST ?= { create_character = { } } }\n",
+                "game/common/scripted_effects/00_politics.txt":
+                    "effect_starting_politics_traditional = { activate_law = law_type:law_monarchy }\n"
+                    "effect_starting_technology_tier_1_tech = { add_era_researched = era_1 "
+                    "add_technology_researched = railways }\n",
+            }
+            for rel, text in files.items():
+                path = Path(tmp) / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+            data = GameData.__new__(GameData)
+            data.fs = FileSystem([Source(name, name, Path(tmp) / name, "mod") for name in ("game", "mod")])
+            data.warnings = []
+            data.state_shares = {"STATE_TEST": [{"country": "TST", "provinces": ["AAAAAA", "BBBBBB"],
+                                                 "unincorporated": False}]}
+            data._load_countries()
+            self.assertEqual(data.history_files["governments"], {"TST": ["common/history/governments/tst - test.txt"]})
+            self.assertEqual(data.governments["TST"], {"ruling_party": "liberal_party"})
+            self.assertEqual(data.populations["TST"], {"wealth": "high", "literacy": ""})
+            self.assertEqual(data.histories["TST"]["ruling"], ["ig_intelligentsia", "ig_devout"])
+            self.assertEqual(data.country_stats["TST"], {"states": 1, "provinces": 2, "population": 2000,
+                                                         "buildings": 1, "characters": 1})
+            self.assertEqual(data.start_effects, {"effect_starting_politics_traditional": [{"law": "law_monarchy",
+                                                                                           "cond": None}]})
+            self.assertEqual(data.tech_tiers, {1: {"eras": ["era_1"], "techs": ["railways"]}})
+            base = data.start_base()
+            self.assertEqual(base.text("common/history/governments/tst - test.txt"), GOVERNMENT)
+
+
 class LocalizationTest(unittest.TestCase):
     def test_read_and_clean(self):
         entries = read_loc_text('l_english:\n company_x:0 "The #b $other$#! Co." # note\n other: "Big"\n')["english"]
@@ -515,6 +781,10 @@ class LocalizationTest(unittest.TestCase):
         self.assertEqual(Localization(entries).name("company_x"), "The Big Co.")
         self.assertEqual(Localization({}, Localization(entries)).name("other"), "Big")
         self.assertEqual(Localization({}).name("missing"), "missing")
+        # a text that is only script (as a mod's [GetCustom(...)] name) takes the fallback language's
+        scripted = Localization({"party": "[SCOPE.GetCustom('x')]"}, Localization({"party": "Party"}))
+        self.assertEqual(scripted.name("party"), "Party")
+        self.assertEqual(Localization({"party": "[SCOPE.GetCustom('x')]"}).name("party"), "party")
 
 
 def bit_block(fields):
@@ -795,6 +1065,38 @@ class ProjectTest(unittest.TestCase):
         reopened = project.load_project(folder)
         self.assertEqual((reopened["law_groups"], reopened["laws"]), ([group], [first, second]))
 
+    def test_country_starts(self):
+        folder = Path(project.create_project(str(self.mods), "Starts", "1.15.1"))
+        start = sample_start(names={"english": "Testland"}, adjs={"english": "Testish"},
+                             ig_names={"ig_devout": {"english": "The Church"}}, definition={"tier": "empire"},
+                             tax_level="high", laws={"lawgroup_labor_rights": "law_worker_protections"})
+        everyone = countries.normalize_start({"mode": "all", "laws": {"lawgroup_labor_rights": "law_no_workers_rights"}})
+        proj = project.load_project(folder)
+        proj["country_starts"] = [start, everyone]
+        generated = project.save_project(folder, proj, base=country_base())
+        self.assertEqual(sorted(generated), [
+            "common/country_definitions/zzz_starts_countries.txt",
+            "common/history/countries/tst - test.txt",
+            "common/history/global/zzz_starts_start.txt",
+            "localization/english/replace/starts_countries_replace_l_english.yml",
+            "localization/english/starts_countries_l_english.yml"])
+        history = (folder / "common/history/countries/tst - test.txt").read_text(encoding="utf-8-sig")
+        self.assertIn("set_tax_level = high", history)
+        definitions = parse((folder / "common/country_definitions/zzz_starts_countries.txt").read_text(encoding="utf-8-sig"))
+        self.assertEqual(definitions.get("REPLACE_OR_CREATE:TST").get("tier"), "empire")
+        replaced = read_loc_file(folder / "localization/english/replace/starts_countries_replace_l_english.yml")
+        self.assertEqual(replaced["english"], {"TST": "Testland", "TST_ADJ": "Testish"})
+        names = read_loc_file(folder / "localization/english/starts_countries_l_english.yml")
+        self.assertEqual(names["english"], {"starts_tst_ig_devout_name": "The Church"})
+        self.assertEqual(project.load_project(folder)["country_starts"], [start, everyone])
+        # saved without the game data, the copies stay as they were
+        self.assertEqual(sorted(project.save_project(folder, project.load_project(folder))), sorted(generated))
+        # without the changes the copies go, and the files in effect count again
+        proj = project.load_project(folder)
+        proj["country_starts"] = []
+        self.assertEqual(project.save_project(folder, proj, base=country_base()), [])
+        self.assertFalse((folder / "common").exists())
+
     def test_stale_files_are_removed_but_nothing_else(self):
         folder = Path(project.create_project(str(self.mods), "Clean", "1.15.1"))
         mine = folder / "common" / "company_types" / "my_own_file.txt"
@@ -835,10 +1137,10 @@ class InterfaceTextTest(unittest.TestCase):
         "home.folder.": ["game_dir", "workshop_dir", "local_mod_dir"],
         "home.folder_error.": ["missing", "not_game", "not_found"],
         "home.mod_kind.": ["workshop", "local"],
-        "home.step.": ["start", "companies", "buildings", "modifiers", "states", "misc", "textures",
+        "home.step.": ["start", "companies", "buildings", "modifiers", "states", "misc", "countries", "textures",
                        "localization", "done"],
         "home.stat.": ["companies", "buildings", "modifiers", "states", "mods"],
-        "company.mode.": ["new", "override"],
+        "company.mode.": ["new", "override", "all"],
         "version_note.": ["active", "same", "hidden", "shown"],
         "block.": ["prestige_goods_trigger", "potential", "attainable", "possible", "can_establish_in",
                    "ai_construction_targets", "ai_weight"],
@@ -854,7 +1156,18 @@ class InterfaceTextTest(unittest.TestCase):
         "error.": ["offline", "server_error", "not_loaded", "no_project", "folders_invalid", "bad_request",
                    "not_found", "name_missing", "browse_unavailable", "bad_path", "unsupported_texture",
                    "forbidden", "open_folder_failed", "image_kind", "image_too_large", "image_format"],
-        "sidebar.category.": ["company", "factory", "monument", "law", "law_group"],
+        "sidebar.category.": ["company", "factory", "monument", "law", "law_group", "country_start"],
+        "country.tab.": ["country", "politics", "technology", "other"],
+        "country.part.": ["names", "color", "country_type", "tier", "cultures", "capital", "religion", "social_hierarchy",
+                          "ig_names", "ruling", "tax_level", "taxed_goods", "tariffs", "institutions", "election",
+                          "ruling_party", "tech_tier", "techs", "wealth", "literacy", "extra"],
+        "country.via.": ["explicit", "preset", "default", "all", "mine"],
+        "country.via_hint.": ["explicit", "default", "all", "mine"],
+        "country.wealth.": ["low", "medium", "high", "very_high"],
+        "country.literacy.": ["very_low", "low", "baseline", "middling", "high", "very_high"],
+        "cproblem.": ["election", "cultures", "country_unknown", "law", "country_type", "tier", "capital", "religion",
+                      "social_hierarchy", "tax_level", "wealth", "literacy", "goods", "tariffs", "institutions", "techs",
+                      "igs", "ruling_party"],
         "lgroup.block.": ["enable", "change_allowed_trigger"],
         "lgroup.block_hint.": ["enable", "change_allowed_trigger"],
         "gproblem.": ['key_missing', 'key_invalid', 'key_exists', 'category', 'opinion_impact', 'enactment_days', 'approval_mult', 'hierarchy'],

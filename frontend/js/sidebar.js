@@ -9,7 +9,8 @@
 // The list shows what is saved in the mod: a new item, or a change to one, appears after saving.
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { store, companyName, factoryName, monumentName, lawName, lawGroupName, setProject, keptImages } from './store.js';
+import { store, companyName, factoryName, monumentName, lawName, lawGroupName, countryStartName, countryColor,
+  setProject, keptImages } from './store.js';
 import { h, fill, toast } from './ui.js';
 import { thumb } from './icons.js';
 import { run } from './widgets.js';
@@ -22,6 +23,8 @@ const KINDS = {
   monument: { items: (project) => project.monuments || [], name: monumentName, icon: (item) => item.icon },
   law_group: { items: (project) => project.law_groups || [], name: lawGroupName, icon: () => '', page: 'law' },
   law: { items: (project) => project.laws || [], name: lawName, icon: (item) => item.icon },
+  country_start: { items: (project) => project.country_starts || [], name: countryStartName, icon: () => '',
+    swatch: countryColor, page: 'country' },
 };
 
 // Collapsed categories, and '' when the whole sidebar is collapsed.
@@ -134,7 +137,10 @@ function group(kind, def, state) {
 function row(def, item, { current, unsaved, onOpen, onRemove, removeTitle }) {
   return h('div', { class: 'side-item' + (current ? ' current' : '') },
     h('button', { class: 'side-item-main', onclick: onOpen && (() => run(onOpen)) },
-      thumb(def.icon(item), 64, 'side-icon'),
+      def.swatch
+        ? h('span', { class: 'side-icon side-swatch', style: def.swatch(item) ? `background:rgb(${def.swatch(item).join(',')})` : '' },
+          def.swatch(item) ? '' : '∗')
+        : thumb(def.icon(item), 64, 'side-icon'),
       h('span', { class: 'company-title' },
         h('span', { class: 'company-name' }, def.name(item)),
         h('span', { class: 'company-key' }, item.key || '—')),

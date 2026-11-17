@@ -317,7 +317,7 @@ select.input { padding-right: 4px; }
 
 /* --------------------------------------------------------- company builder */
 
-.view-company, .view-factory, .view-monument, .view-law { overflow: hidden; }
+.view-company, .view-factory, .view-monument, .view-law, .view-country { overflow: hidden; }
 .builder {
   display: grid;
   grid-template-columns: minmax(210px, 250px) minmax(260px, 320px) minmax(440px, 1fr) minmax(300px, 380px);
@@ -469,6 +469,52 @@ select.input { padding-right: 4px; }
 .law-version { flex: 1; align-items: center; }
 .law-special-none { display: none; }
 .col-sidebar.collapsed { padding: 0; overflow: hidden; }
+
+/* country starts: the world (map and list of countries), and the editor in tabs */
+.builder.country-world-mode { grid-template-columns: minmax(210px, 250px) minmax(0, 1fr) minmax(280px, 340px); }
+.builder.country-world-mode.sidebar-collapsed { grid-template-columns: 40px minmax(0, 1fr) minmax(280px, 340px); }
+.builder.country-edit { grid-template-columns: minmax(210px, 250px) minmax(280px, 340px) minmax(440px, 1fr); }
+.builder.country-edit.sidebar-collapsed { grid-template-columns: 40px minmax(280px, 340px) minmax(440px, 1fr); }
+.country-world { background: var(--bg); }
+.country-world .map { max-height: none; }
+.country-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.country-rows { display: flex; flex-direction: column; gap: 2px; }
+.country-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 6px; font: inherit; color: var(--text);
+  text-align: left; background: none; border: 1px solid transparent; border-radius: var(--radius); cursor: pointer; }
+.country-row:hover { background: var(--panel-3); }
+.country-row .company-title { flex: 1; min-width: 0; }
+.country-row.everyone { border-color: var(--line); background: var(--panel-2); }
+.country-swatch { flex: none; display: inline-grid; place-items: center; width: 22px; height: 15px; border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.5); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
+.country-swatch.all, .side-swatch { color: var(--accent); font-weight: 700; background: var(--panel-3); }
+.side-icon.side-swatch { display: grid; place-items: center; height: 18px; border-radius: 2px; border: 1px solid rgba(0, 0, 0, 0.5); }
+.country-flag { aspect-ratio: 3 / 2; max-height: 150px; border-radius: var(--radius); border: 1px solid var(--line);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
+.country-flag.all { display: grid; place-items: center; font-size: 54px; color: var(--accent); background: var(--panel-2); }
+.country-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.country-stats .stat b { font-size: 16px; }
+.country-changes { font-size: 13px; }
+.tabs { flex: 1; display: flex; flex-wrap: wrap; gap: 4px; }
+.tab { padding: 5px 14px; font: inherit; color: var(--muted); background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); cursor: pointer; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+.country-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.country-label { display: inline-flex; align-items: center; gap: 6px; }
+.country-date { width: 160px; }
+.country-capital { gap: 10px; }
+.country-section-tools { justify-content: flex-end; }
+.country-color { width: 54px; height: 30px; padding: 0 2px; background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: var(--radius); cursor: pointer; }
+.country-line { padding: 3px 0; border-bottom: 1px solid var(--panel-2); }
+.country-line .input { width: auto; flex: 1; min-width: 120px; }
+.country-ig { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 10px;
+  padding: 2px 0; }
+.country-ig .stance-icon { width: 26px; height: 26px; }
+.country-via { gap: 4px; margin-top: 2px; }
+.country-law { width: 100%; }
+.country-law.current { background: var(--accent-soft); border-radius: var(--radius); }
+.law-group.changed { border-color: var(--accent); }
 .side-strip {
   flex: 1;
   display: flex;
@@ -763,8 +809,10 @@ img.broken { visibility: hidden; }
 .toast-error { border-left-color: var(--bad); }
 
 @media (max-width: 1240px) {
-  .view-company, .view-factory, .view-monument, .view-law { overflow: auto; }
-  .builder, .builder.sidebar-collapsed, .builder.law-board-mode, .builder.law-edit { grid-template-columns: 1fr; height: auto; }
+  .view-company, .view-factory, .view-monument, .view-law, .view-country { overflow: auto; }
+  .builder, .builder.sidebar-collapsed, .builder.law-board-mode, .builder.law-edit,
+  .builder.country-world-mode, .builder.country-edit { grid-template-columns: 1fr; height: auto; }
+  .country-grid { grid-template-columns: 1fr; }
   .law-columns { grid-template-columns: 1fr; }
   .side-strip { flex-direction: row; padding: 10px 14px; }
   .side-strip-title { writing-mode: horizontal-tb; letter-spacing: 0; }

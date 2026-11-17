@@ -73,24 +73,34 @@ async function buildMap() {
   const pixels = image.data;
 
   const states = info.states;
+  // provinces by colour: their number (from 1) and the state they are in
   const byColor = new Map();
-  states.forEach((state, i) => state.provinces.forEach((hex) => byColor.set(parseInt(hex, 16), i)));
+  const provinceKeys = [];
+  const provinceStates = [];
+  states.forEach((state, i) => state.provinces.forEach((hex) => {
+    byColor.set(parseInt(hex, 16), provinceKeys.length + 1);
+    provinceKeys.push(hex);
+    provinceStates.push(i);
+  }));
 
-  // Which state each pixel belongs to, plus each state's bounding box and centre.
+  // Which province and state each pixel belongs to, plus each state's bounding box and centre.
   const index = new Int16Array(width * height);
+  const provinces = new Uint16Array(width * height);  // 0: no province
   const box = states.map(() => [width, height, -1, -1]);
   const sums = states.map(() => [0, 0, 0]);
   let lastColor = -1;
   let lastState = -1;
+  let lastProvince = 0;
   for (let y = 0, i = 0; y < height; y++) {
     for (let x = 0; x < width; x++, i++) {
       const color = (pixels[i * 4] << 16) | (pixels[i * 4 + 1] << 8) | pixels[i * 4 + 2];
       if (color !== lastColor) {
         lastColor = color;
-        const found = byColor.get(color);
-        lastState = found === undefined ? -1 : found;
+        lastProvince = byColor.get(color) || 0;
+        lastState = lastProvince ? provinceStates[lastProvince - 1] : -1;
       }
       index[i] = lastState;
+      provinces[i] = lastProvince;
       if (lastState >= 0) {
         const b = box[lastState];
         if (x < b[0]) b[0] = x;
@@ -125,7 +135,8 @@ async function buildMap() {
   ctx.putImageData(image, 0, 0);
 
   return {
-    width, height, fullHeight, layer, ctx, index, border, colors, box, states,
+    width, height, fullHeight, layer, ctx, index, border, colors, box, states, provinces, provinceKeys,
+    provinceIndex: new Map(provinceKeys.map((hex, i) => [hex, i + 1])),
     keyIndex: new Map(states.map((state, i) => [state.key, i])),
     centers: sums.map((s) => (s[2] ? [s[0] / s[2], s[1] / s[2]] : null)),
     painted: new Map(),  // state index -> 'selected' | 'hover' | 'selected-hover'
@@ -189,12 +200,17 @@ export class StateMap {
     loadMap().then((map) => {
       this.map = map;
       this.message.hidden = true;
-      this.repaintAll();
       this.fit();
+      this.ready();
     }).catch((error) => {
       console.error(error);
       this.message.textContent = t('map.failed');
     });
+  }
+
+  // The map is loaded: paint it.
+  ready() {
+    this.repaintAll();
   }
 
   // Bring the shared map picture in line with this widget's selection.
@@ -286,11 +302,8 @@ export class StateMap {
   }
 
   stateAt(px, py) {
-    const map = this.map;
-    const x = Math.floor(this.x + px / this.scale);
-    const y = Math.floor(this.y + py / this.scale);
-    if (x < 0 || y < 0 || x >= map.width || y >= map.height) return -1;
-    return map.index[y * map.width + x];
+    const at = this.pixelAt(px, py);
+    return at === null ? -1 : this.map.index[at];
   }
 
   bind() {
@@ -326,7 +339,7 @@ export class StateMap {
         }
       }
       const [px, py] = position(event);
-      this.setHover(this.stateAt(px, py), px, py);
+      this.hoverAt(px, py);
     });
     canvas.addEventListener('pointerup', (event) => {
       if (!this.map || !drag) return;
@@ -334,16 +347,42 @@ export class StateMap {
       drag = null;
       if (moved) return;
       const [px, py] = position(event);
-      const state = this.stateAt(px, py);
-      if (state < 0 || this.map.states[state].sea) return;
-      const key = this.map.states[state].key;
-      if (!this.onPoint) return this.onToggle(key);
-      const x = (this.x + px / this.scale) * SHRINK;
-      const y = (this.y + py / this.scale) * SHRINK;
-      this.onPoint(key, Math.round(x * 100) / 100, Math.round((this.map.fullHeight - y) * 100) / 100);
+      this.clickAt(px, py);
     });
     canvas.addEventListener('pointercancel', () => { drag = null; });
-    canvas.addEventListener('pointerleave', () => this.setHover(-1));
+    canvas.addEventListener('pointerleave', () => this.hoverAt(-1, -1));
+  }
+
+  // Position on the map (half the size of provinces.png) under a point of the widget, or null.
+  pixelAt(px, py) {
+    const map = this.map;
+    const x = Math.floor(this.x + px / this.scale);
+    const y = Math.floor(this.y + py / this.scale);
+    if (px < 0 || x < 0 || y < 0 || x >= map.width || y >= map.height) return null;
+    return y * map.width + x;
+  }
+
+  hoverAt(px, py) {
+    this.setHover(px < 0 ? -1 : this.stateAt(px, py), px, py);
+  }
+
+  clickAt(px, py) {
+    const state = this.stateAt(px, py);
+    if (state < 0 || this.map.states[state].sea) return;
+    const key = this.map.states[state].key;
+    if (!this.onPoint) return this.onToggle(key);
+    const x = (this.x + px / this.scale) * SHRINK;
+    const y = (this.y + py / this.scale) * SHRINK;
+    this.onPoint(key, Math.round(x * 100) / 100, Math.round((this.map.fullHeight - y) * 100) / 100);
+  }
+
+  showTip(lines, px, py) {
+    this.tip.replaceChildren(...lines);
+    this.tip.hidden = false;
+    const flip = px > this.el.clientWidth * 0.6;
+    this.tip.style.left = flip ? '' : `${px + 14}px`;
+    this.tip.style.right = flip ? `${this.el.clientWidth - px + 14}px` : '';
+    this.tip.style.top = `${Math.min(py + 14, this.el.clientHeight - 70)}px`;
   }
 
   setHover(state, px, py) {
@@ -366,12 +405,7 @@ export class StateMap {
       const shown = companies.slice(0, 6).join(', ') + (companies.length > 6 ? ` +${companies.length - 6}` : '');
       lines.push(h('span', {}, this.markerText(companies.length, shown)));
     }
-    this.tip.replaceChildren(...lines);
-    this.tip.hidden = false;
-    const flip = px > this.el.clientWidth * 0.6;
-    this.tip.style.left = flip ? '' : `${px + 14}px`;
-    this.tip.style.right = flip ? `${this.el.clientWidth - px + 14}px` : '';
-    this.tip.style.top = `${Math.min(py + 14, this.el.clientHeight - 70)}px`;
+    this.showTip(lines, px, py);
   }
 
   draw() {
@@ -386,7 +420,7 @@ export class StateMap {
     const scale = this.scale * ratio;
     ctx.imageSmoothingEnabled = scale < 1;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(map.layer, -this.x * scale, -this.y * scale, map.width * scale, map.height * scale);
+    ctx.drawImage(this.layer || map.layer, -this.x * scale, -this.y * scale, map.width * scale, map.height * scale);
 
     const dot = (key, radius, fill) => {
       const center = map.centers[map.keyIndex.get(key)];
@@ -422,5 +456,170 @@ export class StateMap {
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
       ctx.stroke();
     }
+  }
+}
+
+const UNOWNED = [62, 66, 72];
+const NO_COLOR = [120, 120, 120];
+
+const dim = (color) => color.map((value) => Math.round(value * 0.3 + 34));
+
+// The world as it starts: every province in the colour of the country that owns it.
+// setOwners(owners: Map province -> tag, colors: Map tag -> [r, g, b], focus) paints it. Without a focus,
+// onPick(tag) is called when a country is clicked. With focus {tag, state}, the other countries are
+// dimmed, the state is marked, the view goes to the country, and onState(stateKey) is called when a
+// state is clicked.
+export class CountryMap extends StateMap {
+  constructor({ onPick = () => {}, onState = null }) {
+    super({ onToggle: () => {} });
+    this.onPick = onPick;
+    this.onState = onState;
+    this.owners = null;
+    this.colors = null;
+    this.focus = null;
+    this.layer = null;          // this widget's own picture: the shared one shows the states
+    this.provinceOwner = null;  // province number -> number of its owner in ownerTags (0: nobody)
+    this.ownerTags = [];
+    this.zoomedTo = null;       // the country the view went to
+    this.pendingZoom = null;    // where to go once the widget is on the page
+  }
+
+  setOwners(owners, colors, focus = null) {
+    this.owners = owners;
+    this.colors = colors;
+    this.focus = focus;
+    if (this.map) this.paint();
+  }
+
+  ready() {
+    this.paint();
+  }
+
+  resize() {
+    super.resize();
+    if (this.pendingZoom && this.map && this.el.clientWidth) {
+      this.zoomTo(this.pendingZoom);
+      this.pendingZoom = null;
+    }
+  }
+
+  // Show a box of the map ([x0, y0, x1, y1] in map pixels) with some room around it.
+  zoomTo([x0, y0, x1, y1]) {
+    const width = this.el.clientWidth;
+    const height = this.el.clientHeight;
+    const scale = Math.max(this.minScale(), Math.min(width / (Math.max(x1 - x0, 30) * 1.8),
+      height / (Math.max(y1 - y0, 20) * 1.8), 6));
+    this.scale = scale;
+    this.zoomed = scale > this.minScale();
+    this.x = (x0 + x1) / 2 - width / scale / 2;
+    this.y = (y0 + y1) / 2 - height / scale / 2;
+    this.clamp();
+    this.draw();
+  }
+
+  paint() {
+    const map = this.map;
+    if (!map || !this.owners) return;
+    const tags = [];
+    const numbers = new Map();
+    const owner = new Uint16Array(map.provinceKeys.length + 1);
+    map.provinceKeys.forEach((hex, i) => {
+      const tag = this.owners.get(hex);
+      if (!tag) return;
+      if (!numbers.has(tag)) numbers.set(tag, tags.push(tag));
+      owner[i + 1] = numbers.get(tag);
+    });
+    this.provinceOwner = owner;
+    this.ownerTags = tags;
+    const focus = this.focus;
+    const focusNumber = focus ? numbers.get(focus.tag) || -1 : 0;
+    const marked = focus && focus.state ? map.keyIndex.get(focus.state) : undefined;
+    const palette = tags.map((tag) => {
+      const color = this.colors.get(tag) || NO_COLOR;
+      return focus && tag !== focus.tag ? dim(color) : color;
+    });
+    const unowned = focus ? dim(UNOWNED) : UNOWNED;
+    // Where the focused country is, near the marked state (the capital): colonies far away would
+    // otherwise make the view the whole world.
+    const box = [map.width, map.height, -1, -1];
+    const markedBox = marked !== undefined && map.box[marked][2] >= 0 ? map.box[marked] : null;
+    const near = markedBox ? [(markedBox[0] + markedBox[2]) / 2 - 300, (markedBox[1] + markedBox[3]) / 2 - 180,
+      (markedBox[0] + markedBox[2]) / 2 + 300, (markedBox[1] + markedBox[3]) / 2 + 180] : null;
+    if (!this.layer) {
+      this.layer = h('canvas', { width: map.width, height: map.height });
+    }
+    const ctx = this.layer.getContext('2d');
+    const image = ctx.createImageData(map.width, map.height);
+    const pixels = image.data;
+    const { width, height, provinces, index, states } = map;
+    for (let y = 0, i = 0; y < height; y++) {
+      for (let x = 0; x < width; x++, i++) {
+        const state = index[i];
+        let color = NO_STATE;
+        let shade = 1;
+        if (state >= 0 && states[state].sea) {
+          color = SEA;
+        } else if (state >= 0) {
+          const mine = owner[provinces[i]];
+          color = state === marked ? SELECTED : mine ? palette[mine - 1] : unowned;
+          if (mine === focusNumber && (!near || (x >= near[0] && x <= near[2] && y >= near[1] && y <= near[3]))) {
+            if (x < box[0]) box[0] = x;
+            if (y < box[1]) box[1] = y;
+            if (x > box[2]) box[2] = x;
+            if (y > box[3]) box[3] = y;
+          }
+          // country borders dark, state borders inside a country lighter
+          const right = x + 1 < width ? i + 1 : -1;
+          const below = y + 1 < height ? i + width : -1;
+          for (const next of [right, below]) {
+            if (next < 0 || index[next] < 0) continue;
+            if (owner[provinces[next]] !== mine && !states[index[next]].sea) shade = Math.min(shade, 0.45);
+            else if (index[next] !== state) shade = Math.min(shade, 0.78);
+          }
+        }
+        const p = i * 4;
+        pixels[p] = color[0] * shade;
+        pixels[p + 1] = color[1] * shade;
+        pixels[p + 2] = color[2] * shade;
+        pixels[p + 3] = 255;
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    const target = box[2] >= 0 ? box : markedBox;  // a capital away from the country's land: the capital
+    if (focus && focus.tag !== this.zoomedTo && target) {
+      this.zoomedTo = focus.tag;
+      if (this.el.clientWidth) this.zoomTo(target);
+      else this.pendingZoom = target;  // resize() goes there once the widget is shown
+    }
+    this.draw();
+  }
+
+  // The country and state under a point: {tag, state} (tag '' for land nobody owns), or null.
+  placeAt(px, py) {
+    const at = px < 0 ? null : this.pixelAt(px, py);
+    if (at === null || !this.provinceOwner) return null;
+    const state = this.map.index[at];
+    if (state < 0 || this.map.states[state].sea) return null;
+    const mine = this.provinceOwner[this.map.provinces[at]];
+    return { tag: mine ? this.ownerTags[mine - 1] : '', state: this.map.states[state].key };
+  }
+
+  hoverAt(px, py) {
+    const place = this.placeAt(px, py);
+    if (!place) {
+      this.tip.hidden = true;
+      return;
+    }
+    this.showTip([
+      h('b', {}, place.tag ? `${nameOf('countries', place.tag)} (${place.tag})` : t('map.unowned')),
+      h('span', { class: 'muted' }, nameOf('states', place.state)),
+    ], px, py);
+  }
+
+  clickAt(px, py) {
+    const place = this.placeAt(px, py);
+    if (!place) return;
+    if (this.onState) this.onState(place.state);
+    else if (place.tag) this.onPick(place.tag);
   }
 }

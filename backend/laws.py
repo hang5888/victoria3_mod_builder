@@ -5,7 +5,7 @@ not changed). Interest groups take their stance on a law from their ideologies, 
 tool does not change: a new law gets stances only through its `parent`, whose stances it
 inherits (the game also treats it as a variant of the parent); the laws of a new group have no
 parent, so every interest group is neutral about them.
-Which laws countries start with belongs to the country starts (not made yet), not here; in a
+Which laws countries start with belongs to the country starts (countries.py), not here; in a
 new group, which no history sets, every country starts with the group's first law (the first
 one the mod made, as the laws are written in the order they were made).
 

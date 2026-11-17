@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import mods, project, textures
 from .companies import normalize_company, validate_company
+from .countries import is_empty_start, normalize_start, validate_start
 from .factories import normalize_factory, own_keys, validate_factory
 from .laws import normalize_law, normalize_law_group, validate_law, validate_law_group
 from .monuments import normalize_monument, validate_monument
@@ -90,7 +91,8 @@ class App:
         """
         keep = (body or {}).get("keep_images") or []
         keep = [k for k in keep if isinstance(k, str)] if isinstance(keep, list) else []
-        return project.save_project(path, proj, self.require_data().modifier_templates, keep)
+        data = self.require_data()
+        return project.save_project(path, proj, data.modifier_templates, keep, data.start_base())
 
     def project_image(self, rel):
         """An image imported into the current project (not part of the game data)."""
@@ -154,13 +156,18 @@ class App:
             self.texture_cache = {}
             self.load_state = {"state": "ready", "step": "done", "done": 1, "total": 1, "error": ""}
 
-    def payload(self, language):
+    def payload(self, language, kind="data"):
+        """The game data for the pages (`kind` "data"), or for the country start page ("countries")."""
         data = self.require_data()
         with self.lock:
-            if language not in self.payload_cache:
-                body = json.dumps(data.payload(language), ensure_ascii=False).encode("utf-8")
-                self.payload_cache = {language: body}  # keep one language in memory
-            return self.payload_cache[language]
+            key = (kind, language)
+            if key not in self.payload_cache:
+                build = data.country_payload if kind == "countries" else data.payload
+                body = json.dumps(build(language), ensure_ascii=False).encode("utf-8")
+                # keep one language in memory
+                self.payload_cache = {k: v for k, v in self.payload_cache.items() if k[1] == language}
+                self.payload_cache[key] = body
+            return self.payload_cache[key]
 
     def texture(self, rel, size):
         data = self.require_data()
@@ -344,6 +351,15 @@ def api_post(app, path, body):
             proj["laws"] = [law for law in proj["laws"] if law["key"] != body.get("key")]
             app.save_project(path_, proj, body)
             return proj
+    if path == "/api/project/country_start":
+        return save_start(app, body)
+    if path == "/api/project/country_start/delete":
+        with app.lock:
+            path_ = app.require_project()
+            proj = project.load_project(path_)
+            proj["country_starts"] = [s for s in proj["country_starts"] if s["key"] != body.get("key")]
+            app.save_project(path_, proj, body)
+            return proj
     if path == "/api/project/image":
         try:
             data = base64.b64decode(str(body.get("data") or ""), validate=True)
@@ -478,6 +494,43 @@ def save_law_group(app, body):
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
 
 
+def save_start(app, body):
+    """Add or update one country start (or the laws of every country) and regenerate the mod files."""
+    if not isinstance(body.get("start"), dict):
+        raise ApiError("bad_request")
+    try:
+        clean = normalize_start(body["start"])
+    except (ValueError, TypeError, AttributeError):
+        raise ApiError("bad_request")
+    with app.lock:
+        data = app.require_data()
+        path = app.require_project()
+        proj = project.load_project(path)
+        laws = {key: law["group"] for key, law in data.laws.items()}
+        laws.update({law["key"]: law["group"] for law in proj["laws"]})
+        game = {
+            "countries": set(data.country_defs), "laws": laws,
+            "groups": set(data.law_groups) | {group["key"] for group in proj["law_groups"]},
+            "goods": set(data.goods), "techs": set(data.technologies), "igs": set(data.interest_groups),
+            "institutions": set(data.institutions), "parties": set(data.parties), "cultures": set(data.cultures),
+            "states": set(data.states), "religions": set(data.key_lists["religions"]),
+            "hierarchies": set(data.social_hierarchies),
+        }
+        errors = validate_start(clean, game)
+        if errors:
+            return {"errors": errors}
+        index = next((i for i, s in enumerate(proj["country_starts"]) if s["key"] == clean["key"]), None)
+        if is_empty_start(clean):
+            # everything put back as the game has it: the mod has nothing for this country
+            proj["country_starts"] = [s for s in proj["country_starts"] if s["key"] != clean["key"]]
+        elif index is None:
+            proj["country_starts"].append(clean)
+        else:
+            proj["country_starts"][index] = clean
+        generated = app.save_project(path, proj, body)
+        return {"errors": [], "project": proj, "generated": generated, "dir": path}
+
+
 class Handler(BaseHTTPRequestHandler):
     app = None
     protocol_version = "HTTP/1.1"
@@ -527,6 +580,8 @@ class Handler(BaseHTTPRequestHandler):
         app = self.app
         if url.path == "/api/data":
             return self._json(app.payload(query.get("lang") or "english"))
+        if url.path == "/api/countries":
+            return self._json(app.payload(query.get("lang") or "english", "countries"))
         if url.path == "/api/texture":
             try:
                 size = min(1024, max(16, int(query.get("size") or 64)))

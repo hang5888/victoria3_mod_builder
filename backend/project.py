@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 from .companies import LANGUAGE_PATTERN, company_to_script, empty_company
+from .countries import definition_script, fill_start, global_laws_script, start_languages, start_texts, write_starts
 from .factories import (factory_to_script, fill_factory, modifier_texts, own_pmgs, own_pms, pm_to_script,
                         pmg_to_script)
 from .laws import fill_law, fill_law_group, law_group_to_script, law_texts, law_to_script
@@ -68,8 +69,8 @@ def create_project(local_mod_dir, name, game_version):
     (folder / ".metadata" / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     project = {"tool": "vic-mod-builder", "format": FORMAT, "name": name, "slug": folder.name,
-               "companies": [], "factories": [], "monuments": [], "laws": [], "law_groups": [], "images": [],
-               "generated_files": []}
+               "companies": [], "factories": [], "monuments": [], "laws": [], "law_groups": [], "country_starts": [],
+               "images": [], "generated_files": []}
     save_project(folder, project)
     return str(folder)
 
@@ -89,6 +90,8 @@ def load_project(project_dir):
     project["monuments"] = [fill_monument(m) for m in project.get("monuments", [])]
     project["laws"] = [fill_law(law) for law in project.get("laws", [])]
     project["law_groups"] = [fill_law_group(group) for group in project.get("law_groups", [])]
+    project["country_starts"] = [fill_start(start) for start in project.get("country_starts", [])
+                                 if isinstance(start, dict)]
     return project
 
 
@@ -214,7 +217,46 @@ def used_images(project):
     return used
 
 
-def save_project(project_dir, project, modifier_templates=lambda lang: None, keep_images=()):
+def _start_file(rel, slug):
+    """True for the files the country starts write."""
+    return rel.startswith(("common/history/", "common/country_definitions/")) or f"/{slug}_countries_" in rel
+
+
+def _write_country_starts(root, slug, starts, base, generated):
+    """Country starts: the overridden definitions, their names, the history files they change (copies of
+    the files in effect, see countries.write_starts) and the laws every country starts with."""
+    countries = [s for s in starts if s["mode"] == "override"]
+    everyone = next((s for s in starts if s["mode"] == "all"), None)
+    definitions = []
+    for start in countries:
+        raw = base.definition(start["key"]) if start["definition"] else None
+        if raw is not None:
+            definitions.append(definition_script(start["key"], raw, start["definition"]))
+    _write_script(root, f"common/country_definitions/zzz_{slug}_countries.txt", definitions, generated)
+    for rel, text in sorted(write_starts(countries, base, slug).items()):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8-sig", newline="\n") as f:
+            f.write(text if text.endswith("\n") else text + "\n")
+        generated.append(rel)
+    script = global_laws_script(everyone["laws"], countries) if everyone else None
+    _write_script(root, f"common/history/global/zzz_{slug}_start.txt", [script] if script else [], generated)
+    for lang in sorted({lang for start in countries for lang in start_languages(start)}):
+        if not LANGUAGE_PATTERN.match(lang):
+            continue
+        replaced, new = {}, {}
+        for start in countries:
+            texts = start_texts(start, lang, slug)
+            replaced.update(texts[0])
+            new.update(texts[1])
+        for entries, rel in ((new, f"localization/{lang}/{slug}_countries_l_{lang}.yml"),
+                             (replaced, f"localization/{lang}/replace/{slug}_countries_replace_l_{lang}.yml")):
+            if entries:
+                write_loc_file(root / rel, lang, entries)
+                generated.append(rel)
+
+
+def save_project(project_dir, project, modifier_templates=lambda lang: None, keep_images=(), base=None):
     """Write the project file and regenerate the game files from it.
 
     Imported images in use are packed into the mod; unused ones are deleted,
@@ -222,6 +264,8 @@ def save_project(project_dir, project, modifier_templates=lambda lang: None, kee
 
     `modifier_templates(lang)`: the game's texts for a building's modifiers in
     that language (see factories.modifier_texts), or None for the built-in English.
+    `base`: the files in effect the country starts are written from (gamedata.StartBase); without it
+    the country starts are not written.
     """
     root = Path(project_dir)
     slug = project["slug"]
@@ -268,6 +312,14 @@ def save_project(project_dir, project, modifier_templates=lambda lang: None, kee
                   [law_group_to_script(group) for group in law_groups], generated)
     _write_script(root, f"common/laws/zzz_{slug}_laws.txt", [law_to_script(law) for law in laws], generated)
     _write_texts(root, slug, "laws", [*law_groups, *laws], law_texts, generated)  # key and key_desc for both
+
+    starts = project.get("country_starts", [])
+    if base is not None:
+        _write_country_starts(root, slug, starts, base, generated)
+    elif starts:
+        # without the game data the copies cannot be made again: keep the ones written last time
+        written = set(generated)
+        generated += [rel for rel in project.get("generated_files", []) if rel not in written and _start_file(rel, slug)]
 
     # Imported images: pack the used ones, drop the others.
     used = used_images(project)

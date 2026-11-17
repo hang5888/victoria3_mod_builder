@@ -5,6 +5,9 @@ from pathlib import Path
 
 from . import pdx_script
 from .companies import company_from_block
+from .countries import (COUNTRY_TYPES, HISTORY_DIRS, LITERACY_LEVELS, TARIFF_LEVELS, TAX_LEVELS, TIERS,
+                        WEALTH_LEVELS, definition_from_block, effect_steps, empty_history, read_government,
+                        read_history, read_population, scope_blocks, tech_tier_techs)
 from .laws import law_from_block, stances_from_block
 from .factories import (MODIFIER_SUFFIXES, MODIFIER_TEMPLATE_BUILDING, factory_from_block, pm_from_block,
                         pmg_from_block)
@@ -127,6 +130,16 @@ def _number(value, default):
         return default
 
 
+def _descs(block, found):
+    """Every `desc = key` in a block (a triggered name), in order."""
+    for entry in block.entries:
+        if entry.key == "desc" and isinstance(entry.value, str):
+            found.append(entry.value)
+        elif isinstance(entry.value, Block):
+            _descs(entry.value, found)
+    return found
+
+
 def game_languages(game_dir):
     """Languages the game ships with, as [{key, name}], read from its localization folder."""
     base = Path(game_dir) / "localization"
@@ -139,6 +152,35 @@ def game_languages(game_dir):
         keys.remove("english")
         keys.insert(0, "english")
     return [{"key": k, "name": names.get(f"l_{k}", k)} for k in keys]
+
+
+class StartBase:
+    """The files in effect that the country starts of a mod are written from (see countries.write_starts)."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def files(self, kind, tag):
+        return self.data.history_files[kind].get(tag, [])
+
+    def text(self, rel):
+        path = self.data.history_paths.get(rel)
+        try:
+            return read_text(path) if path else None
+        except OSError:
+            return None
+
+    def law_group(self, law):
+        info = self.data.laws.get(law)
+        return info["group"] if info else ""
+
+    def ruling(self, tag):
+        return (self.data.histories.get(tag) or {}).get("ruling", [])
+
+    def definition(self, tag):
+        """Source text of the country's definition in effect, `{ ... }`; None for an unknown country."""
+        info = self.data.country_defs.get(tag)
+        return info["raw"] if info else None
 
 
 class GameData:
@@ -157,6 +199,7 @@ class GameData:
             ("modifiers", self._load_modifiers),
             ("states", self._load_states),
             ("misc", self._load_misc),
+            ("countries", self._load_countries),
             ("textures", self._load_textures),
             ("localization", lambda: self.localization("english")),
         ]
@@ -323,7 +366,13 @@ class GameData:
                     self.states[state]["region"] = key
 
     def _load_misc(self):
-        self.countries = list(self.load_db("common/country_definitions"))
+        self.country_defs = {}
+        origins = {}
+        for key, (block, source, rel_name) in self.load_db("common/country_definitions", origins).items():
+            self.country_defs[key] = {**definition_from_block(block), "source": source.id, "file": rel_name,
+                                      "sources": [s.id for s, _b, _f in origins[key]],
+                                      "raw": block.text[block.start:block.end]}  # copied when it is overridden
+        self.countries = list(self.country_defs)
         self.prestige_goods = {}
         for key, (block, _source, _file) in self.load_db("common/prestige_goods").items():
             base = block.get("base_good")
@@ -336,7 +385,17 @@ class GameData:
             era_number = era.rpartition("_")[2] if isinstance(era, str) else ""  # era_3 -> 3 (eras have no names)
             self.technologies[key] = {"icon": texture if isinstance(texture, str) else "",
                                       "era": int(era_number) if era_number.isdigit() else 0}
-        self.cultures = list(self.load_db("common/cultures"))
+        self.culture_religions = {}
+        for key, (block, _source, _file) in self.load_db("common/cultures").items():
+            religion = block.get("religion")
+            self.culture_religions[key] = religion if isinstance(religion, str) else ""
+        self.cultures = list(self.culture_religions)
+        # parties, with the key of their name: the last text of their name, the one used when no other fits
+        self.parties = {}
+        for key, (block, _source, _file) in self.load_db("common/parties").items():
+            name = block.get("name")
+            texts = _descs(name, []) if isinstance(name, Block) else [name] if isinstance(name, str) else []
+            self.parties[key] = texts[-1] if texts else key
         self.key_lists = {name: list(self.load_db(folder)) for name, folder in KEY_LISTS.items()}
         for factory in self.factories.values():
             lens = next((e.value for e in pdx_script.parse(factory["extra"]).entries
@@ -435,6 +494,8 @@ class GameData:
                     except (IndexError, ValueError):
                         continue
         self.state_owners = {}
+        # the parts of each state region the countries own: [{country, provinces, unincorporated}]
+        self.state_shares = {}
         for source, path, rel_name in self.fs.list_files("common/history/states", ".txt"):
             try:
                 root = pdx_script.parse(read_text(path))
@@ -448,11 +509,101 @@ class GameData:
                     if not (state.key and state.key.startswith("s:") and isinstance(state.value, Block)):
                         continue
                     owners = self.state_owners.setdefault(state.key[2:], [])
+                    shares = self.state_shares.setdefault(state.key[2:], [])
                     for create in state.value.get_all("create_state"):
                         country = create.get("country") if isinstance(create, Block) else None
                         tag = country[2:] if isinstance(country, str) and country.startswith("c:") else None
-                        if tag and tag not in owners:
+                        if not tag:
+                            continue
+                        if tag not in owners:
                             owners.append(tag)
+                        provinces = create.get("owned_provinces")
+                        shares.append({
+                            "country": tag,
+                            "provinces": [p.lstrip("xX").upper() for p in provinces.items()]
+                            if isinstance(provinces, Block) else [],
+                            "unincorporated": create.get("state_type") == "unincorporated"})
+
+    def _load_countries(self):
+        """How each country starts: its history, wealth and literacy, ruling party, and what it has."""
+        self.history_paths = {}  # game-relative path of a history file -> the file in effect
+        self.history_files = {kind: {} for kind in HISTORY_DIRS}  # kind -> tag -> [paths with its block]
+        self.histories, self.populations, self.governments = {}, {}, {}
+        readers = {"countries": (self.histories, empty_history, read_history),
+                   "population": (self.populations, lambda: {"wealth": "", "literacy": ""}, read_population),
+                   "governments": (self.governments, lambda: {"ruling_party": ""}, read_government)}
+        for kind, (folder, top) in HISTORY_DIRS.items():
+            target, empty, read = readers[kind]
+            for root, rel, path in self._history_roots(folder):
+                self.history_paths[rel] = path
+                for tag, entry in scope_blocks(root, top):
+                    files = self.history_files[kind].setdefault(tag, [])
+                    if rel not in files:
+                        files.append(rel)
+                    read(target.setdefault(tag, empty()), entry.value)
+
+        self.country_stats = {}
+
+        def stats(tag):
+            return self.country_stats.setdefault(tag, {"states": 0, "provinces": 0, "population": 0,
+                                                       "buildings": 0, "characters": 0})
+
+        for shares in self.state_shares.values():
+            for share in shares:
+                stats(share["country"])["states"] += 1
+                stats(share["country"])["provinces"] += len(share["provinces"])
+        for folder, top, wanted in (("common/history/pops", "POPS", "create_pop"),
+                                    ("common/history/buildings", "BUILDINGS", "create_building")):
+            for root, _rel, _path in self._history_roots(folder):
+                for entry in root.get_all(top):
+                    for state in entry.entries if isinstance(entry, Block) else []:
+                        for part in state.value.entries if isinstance(state.value, Block) else []:
+                            if not (part.key and part.key.startswith("region_state:") and isinstance(part.value, Block)):
+                                continue
+                            counts = stats(part.key[len("region_state:"):])
+                            for item in part.value.get_all(wanted):
+                                if wanted == "create_building":
+                                    counts["buildings"] += 1
+                                elif isinstance(item, Block):
+                                    counts["population"] += int(_number(item.get("size"), 0))
+        for root, _rel, _path in self._history_roots("common/history/characters"):
+            for tag, entry in scope_blocks(root, "CHARACTERS"):
+                stats(tag)["characters"] += len(entry.value.get_all("create_character"))
+
+        # the starting law presets and technology tiers the histories use
+        self._triggers = None
+        self.start_effects, self.tech_tiers = {}, {}
+        for source, path, rel_name in self.fs.list_files("common/scripted_effects", ".txt"):
+            text = read_text(path)
+            if "effect_starting_" not in text:
+                continue
+            for entry in pdx_script.parse(text).entries:
+                if not (entry.key and isinstance(entry.value, Block)):
+                    continue
+                tier = re.fullmatch(r"effect_starting_technology_tier_(\d)_tech", entry.key)
+                if entry.key.startswith("effect_starting_politics_"):
+                    self.start_effects[entry.key] = effect_steps(entry.value, self.scripted_trigger)
+                elif tier:
+                    self.tech_tiers[int(tier.group(1))] = tech_tier_techs(entry.value)
+        self._triggers = None  # only needed while reading the presets
+
+    def _history_roots(self, folder):
+        """The parsed history files of a folder: (root block, game-relative path, file in effect)."""
+        for source, path, rel_name in self.fs.list_files(folder, ".txt"):
+            try:
+                yield pdx_script.parse(read_text(path)), f"{folder}/{rel_name}", path
+            except (OSError, RecursionError) as error:
+                self.warnings.append(f"{source.name}: {folder}/{rel_name}: {error}")
+
+    def scripted_trigger(self, name):
+        """A scripted trigger's block, or None (read on first use)."""
+        if self._triggers is None:
+            self._triggers = {key: block for key, (block, _s, _f) in self.load_db("common/scripted_triggers").items()}
+        return self._triggers.get(name)
+
+    def start_base(self):
+        """What the country starts are written from: the files in effect without the mod being built."""
+        return StartBase(self)
 
     def _load_textures(self):
         suffixes = (".dds", ".png")  # some mods ship .png icons
@@ -588,7 +739,8 @@ class GameData:
             "modifiers": modifiers,
             "states": states,
             "regions": [{"key": key, "name": loc.name(key)} for key in self.regions],
-            "countries": [{"key": tag, "name": loc.name(tag)} for tag in self.countries],
+            "countries": [{"key": tag, "name": loc.name(tag), "color": self.country_defs[tag]["color"]}
+                          for tag in self.countries],
             "prestige_goods": [{"key": key, "name": loc.name(key), "icon": good["icon"],
                                 "good_name": loc.name(good["base"]) if good["base"] else ""}
                                for key, good in self.prestige_goods.items()],
@@ -609,6 +761,45 @@ class GameData:
         loc = self.localization(language)
         texts = {suffix: loc.raw(MODIFIER_TEMPLATE_BUILDING + suffix) for suffix in MODIFIER_SUFFIXES}
         return {suffix: text for suffix, text in texts.items() if text}
+
+    def country_payload(self, language):
+        """What the country start pages need: every country with how it starts, and the presets."""
+        loc = self.localization(language)
+        countries = []
+        for tag, info in self.country_defs.items():
+            if info["dynamic"]:
+                continue  # placeholders for countries made during the game
+            history = self.histories.get(tag) or empty_history()
+            population = self.populations.get(tag) or {}
+            countries.append({
+                "key": tag, "name": loc.name(tag), "adj": loc.name(f"{tag}_ADJ", ""), "def": loc.name(f"{tag}_DEF", ""),
+                **{name: info[name] for name in ("color", "country_type", "tier", "cultures", "capital", "religion",
+                                                 "social_hierarchy", "named_from_capital", "source", "sources", "file")},
+                "history": {**history, "files": self.history_files["countries"].get(tag, [])},
+                "ig_name_texts": {ig: loc.name(key) for ig, key in history["ig_names"].items()},
+                "wealth": population.get("wealth", ""), "literacy": population.get("literacy", ""),
+                "ruling_party": (self.governments.get(tag) or {}).get("ruling_party", ""),
+                "stats": self.country_stats.get(tag) or {"states": 0, "provinces": 0, "population": 0,
+                                                         "buildings": 0, "characters": 0},
+            })
+        return {
+            "countries": countries,
+            "effects": self.start_effects,
+            "tech_tiers": {str(tier): info for tier, info in sorted(self.tech_tiers.items())},
+            # who owns which provinces of each state region: [country, provinces, unincorporated]
+            "shares": {state: [[s["country"], s["provinces"], s["unincorporated"]] for s in shares]
+                       for state, shares in self.state_shares.items() if shares},
+            "culture_religions": self.culture_religions,
+            "parties": [{"key": key, "name": loc.name(name)} for key, name in self.parties.items()],
+            # the choices, with the game's names where it has them
+            "levels": {
+                "country_types": [{"key": key, "name": loc.name(key)} for key in COUNTRY_TYPES],
+                "tiers": [{"key": key, "name": loc.name(f"country_tier_{key}")} for key in TIERS],
+                "tax_levels": [{"key": key, "name": loc.name(f"tax_level_{key}")} for key in TAX_LEVELS],
+                "tariff_levels": [{"key": key, "name": loc.name(key)} for key in TARIFF_LEVELS],
+                "wealth_levels": list(WEALTH_LEVELS), "literacy_levels": list(LITERACY_LEVELS),
+            },
+        }
 
     def map_payload(self):
         return {"states": [{"key": key, "provinces": s["provinces"], "sea": s["sea"]}

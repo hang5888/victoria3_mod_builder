@@ -122,6 +122,21 @@ export function lawGroupName(group) {
   return group.names[language()] || group.names.english || group.key || t('lgroup.unnamed');
 }
 
+// Name of a country start of the project: its own name, else the game's; "every country" for the
+// laws every country starts with.
+export function countryStartName(start) {
+  if (start.mode === 'all') return t('country.all');
+  return (start.names && start.names[language()]) || nameOf('countries', start.key);
+}
+
+// Colour of a country start: the mod's, else the game's ([r, g, b], or null).
+export function countryColor(start) {
+  if (start.mode === 'all') return null;
+  if (start.definition && start.definition.color) return start.definition.color;
+  const game = store.index && store.index.countries.get(start.key);
+  return (game && game.color) || null;
+}
+
 // Game path of an object's icon, or '' when it has none.
 export function iconOf(kind, key) {
   const item = store.index && store.index[kind].get(key);
