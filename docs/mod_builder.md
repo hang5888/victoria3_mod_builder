@@ -10,7 +10,7 @@
 | 自定義工廠 | [mod_types/factory.md](mod_types/factory.md) | 初版已實作 |
 | 奇觀 | [mod_types/monument.md](mod_types/monument.md) | 初版已實作 |
 | 法律 | [mod_types/law.md](mod_types/law.md) | 初版已實作 |
-| 國家開局 | [mod_types/country_start.md](mod_types/country_start.md) | 第 1、2 階段已實作（共 4 階段） |
+| 國家開局 | [mod_types/country_start.md](mod_types/country_start.md) | 4 個階段都已實作 |
 | 其他類型 | 待規劃 | |
 
 ## 1. 專案概述
@@ -258,10 +258,12 @@
 | 生產方式組圖示 | 120×120 | 同公司圖示 |
 | 生產方式圖示 | 104×104 | 同公司圖示 |
 | 法律圖示 | 302×302 | 同公司圖示 |
+| 國旗圖片（新國家） | 768×512 | 同公司圖示（見 [country_start.md](mod_types/country_start.md) 3.3） |
 
 - 瀏覽器讀得到的格式（PNG、JPG、WebP 等）在瀏覽器裡縮放成上表的尺寸，存成 PNG；導入前顯示預覽。`.dds` 檔原樣導入，不縮放。尺寸取自原版 1.15.1 的圖片。
 - 最大 20 MB。檔名取原檔名，加上種類與內容雜湊（例如 `company_icon_my_logo_89a3742b.png`），同一張圖只會存一份。
 - 導入後先放在模組資料夾的 `.vmb_images/`，並記在專案檔；欄位寫的是之後的遊戲路徑 `gfx/interface/icons/<模組>_images/<檔名>`，工具在打包前也能顯示它。
+- 國旗圖片例外：一律轉成未壓縮、有 mipmap 的 DDS（PNG 在後端轉換），檔名是 `<模組>_<原檔名>_<雜湊>.dds`，遊戲路徑是 `gfx/coat_of_arms/textured_emblems/<檔名>`（遊戲用檔名找國旗圖片）。
 - 導入的圖片在選擇器裡排最前面，標示「已導入」，同種類的欄位都選得到。
 - 保存時（任何一種保存）：有已保存項目使用的圖片複製到 `gfx/interface/icons/<模組>_images/`；沒有使用的從模組刪除。編輯頁正在編輯、還沒保存的項目所用的圖片會保留，不打包也不刪。
 

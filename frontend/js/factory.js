@@ -16,12 +16,12 @@ import { store, refreshState, loadData, language, languageName, nameOf, factoryN
   editingImages, keptImages } from './store.js';
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
 import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
-import { thumb, objectIcon, pickerIcon } from './icons.js';
+import { thumb, objectIcon } from './icons.js';
 import { bracesBalanced, scriptValue, setScriptValue } from './script.js';
-import { StateMap } from './map.js';
 import { scriptFields, splitScript, joinScript, usedValues } from './scriptfields.js';
 import { COUNTRY_KINDS, STATE_KINDS, conditionEditor, clearConditionCache, countConditions, valueButton } from './conditions.js';
-import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, pickerItems, imageField,
+import { chooseObjects, pickerItems, pickerOptions } from './choose.js';
+import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, imageField,
   scriptArea as scriptBox } from './widgets.js';
 
 const RAW_BLOCKS = ['potential', 'possible'];
@@ -70,8 +70,6 @@ let filters = pages.factory.filters;
 let listed = [];
 let listLimit = PAGE;
 let expanded = null;
-let locationMap = null;    // the map of the monument page
-let locationMapData = null;
 
 // Make `name` the page this module works on: keep the state of the other one.
 function usePage(name) {
@@ -940,11 +938,12 @@ function pmgCard(entry, index) {
 
 function addRefPms(pmg) {
   const present = new Set(pmg.pms.map((entry) => entry.key));
+  const items = store.data.pms.filter((pm) => !present.has(pm.key)).map((pm) => ({
+    key: pm.key, name: pm.name || pm.key, icon: pm.texture, sub: pm.key, raw: pm }));
   openPicker({
     title: t('factory.add_pm_ref'), selected: [], roomy: true,
     icon: (item) => (item.icon ? textureUrl(item.icon, 64) : ''),
-    items: store.data.pms.filter((pm) => !present.has(pm.key)).map((pm) => ({
-      key: pm.key, name: pm.name || pm.key, icon: pm.texture, sub: pm.key })),
+    items, ...pickerOptions('pms', items),
     onDone: (keys) => {
       pmg.pms.push(...keys.map((key) => ({ type: 'ref', key })));
       restructured();
@@ -980,8 +979,8 @@ function pmReference(pmg, entry, index) {
 // Rows of "object + amount" (goods in or out, employed pops).
 function amountRows(pm, name, objectField, kind, label, startAmount, touch) {
   const rows = pm[name];
-  const add = () => openPicker({
-    title: label, selected: [], icon: pickerIcon(kind),
+  const add = () => chooseObjects({
+    kind, title: label, selected: [],
     items: pickerItems(kind).filter((item) => !rows.some((row) => row[objectField] === item.key)),
     onDone: (keys) => {
       rows.push(...keys.map((key) => ({ [objectField]: key, amount: startAmount })));
@@ -1674,33 +1673,27 @@ function setPosition(state, x, z) {
 
 function locationSection() {
   const { location } = editing;
-  if (!locationMap || locationMapData !== store.data) {
-    locationMap = new StateMap({ onToggle: () => {}, onPoint: (state, x, z) => setPosition(state, x, z),
-      markerText: (count, names) => t('monument.map_monuments', { count, names }) });
-    locationMapData = store.data;
-  }
+  // the map window: the other monuments are marked, a click chooses the state and where the model stands
   const others = monumentPositions().filter((point) => point.key !== editing.key);
   const markers = new Map();
   for (const building of store.data.factories.filter(isMonument)) {
     const state = stateOf(building);
     if (state) markers.set(state, [...(markers.get(state) || []), building.name || building.key]);
   }
-  const position = currentPosition();
-  locationMap.showMarkers = false;
-  locationMap.setMarkers(markers);
-  locationMap.setSelected(location.state ? [location.state] : []);
-  locationMap.setPoints([...others.map((point) => ({ x: point.x, z: point.z, current: false })),
-    ...(position ? [{ ...position, current: true }] : [])]);
   const owners = (store.data.state_owners[location.state] || []);
   const canStart = editing.mode === 'new';
   return section(t('monument.location'), t('monument.location_hint'),
-    locationMap.el,
     h('div', { class: 'row' },
       h('span', { class: 'field-label' }, t('monument.state')),
       valueButton({ kind: 'states', title: t('monument.state'), placeholder: t('monument.anywhere'),
         keys: location.state ? [location.state] : [],
-        onDone: ([state]) => {
-          if (!state || state === location.state) return;
+        map: { position: { current: currentPosition(), others }, markers,
+          markerText: (count, names) => t('monument.map_monuments', { count, names }),
+          markersLabel: t('monument.show_monuments') },
+        onDone: ([state], point) => {
+          if (!state) return;
+          if (point) return setPosition(state, point.x, point.z);
+          if (state === location.state) return;
           Object.assign(location, { state, x: null, z: null });
           changed();
           refresh('location');

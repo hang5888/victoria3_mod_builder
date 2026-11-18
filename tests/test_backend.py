@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backend import countries, project  # noqa: E402
+from backend import characters, countries, diplomacy, flags, project, territory, textures  # noqa: E402
 from backend.companies import (company_from_block, company_to_script, empty_company,  # noqa: E402
                                normalize_company, validate_company)
 from backend.factories import (factory_from_block, factory_to_script, modifier_texts,  # noqa: E402
@@ -21,7 +21,7 @@ from backend.laws import (law_from_block, law_group_to_script, law_to_script, no
                           normalize_law_group, stances_from_block, validate_law, validate_law_group)
 from backend.localization import Localization, read_loc_file, read_loc_text  # noqa: E402
 from backend.mods import PROJECT_FILE  # noqa: E402
-from backend.pdx_script import braces_balanced, parse, split_prefix  # noqa: E402
+from backend.pdx_script import Block, braces_balanced, parse, split_prefix  # noqa: E402
 from backend.textures import _bc7_block  # noqa: E402
 
 COMPANY = """\
@@ -551,15 +551,35 @@ COUNTRY_LAWS = {"law_monarchy": "lawgroup_governance_principles", "law_president
 
 
 class FakeStartBase:
-    """The files in effect the country starts are written from."""
+    """The files in effect the country starts are written from (gamedata.StartBase)."""
 
-    def __init__(self, files):
+    def __init__(self, files, state_provinces=None):
         self.texts = files  # game-relative path -> text
+        self.state_provinces = state_provinces or {}
+        self.shares, self.homelands, self.claims = {}, {}, {}
+        self.pops, self.buildings, self.others = {}, {}, {}
+        self.articles = {"defensive_pact": {"kind": "mutual", "inputs": []},
+                         "goods_transfer": {"kind": "directed", "inputs": ["quantity", "goods"]},
+                         "treaty_port": {"kind": "directed", "inputs": ["state"]}}
+        for rel, text in files.items():
+            root = parse(text)
+            if rel.startswith("common/history/states/"):
+                territory.read_states(root, self.shares, self.homelands, self.claims)
+            elif rel.startswith("common/history/pops/"):
+                territory.read_state_parts(root, "POPS", "pops", self.pops, {})
+            elif rel.startswith("common/history/buildings/"):
+                territory.read_state_parts(root, "BUILDINGS", "buildings", self.buildings, self.others)
 
-    def files(self, kind, tag):
+    def files(self, kind, key):
+        if kind in territory.STATE_DIRS:
+            folder = territory.STATE_DIRS[kind][0]
+            return [rel for rel, text in self.texts.items() if rel.startswith(folder + "/") and f"s:{key} " in text]
         folder = {"countries": "common/history/countries", "population": "common/history/population",
-                  "governments": "common/history/governments"}[kind]
-        return [rel for rel, text in self.texts.items() if rel.startswith(folder + "/") and f"c:{tag} " in text]
+                  "governments": "common/history/governments", "characters": "common/history/characters"}[kind]
+        return [rel for rel, text in self.texts.items() if rel.startswith(folder + "/") and f"c:{key} " in text]
+
+    def folder_files(self, folder):
+        return [rel for rel in self.texts if rel.startswith(folder + "/")]
 
     def text(self, rel):
         return self.texts.get(rel)
@@ -760,6 +780,8 @@ class CountryStartTest(unittest.TestCase):
             data.warnings = []
             data.state_shares = {"STATE_TEST": [{"country": "TST", "provinces": ["AAAAAA", "BBBBBB"],
                                                  "unincorporated": False}]}
+            data.history_paths, data.states, data.state_homelands, data.state_claims = {}, {}, {}, {}
+            data.state_files = {kind: {} for kind in territory.STATE_DIRS}
             data._load_countries()
             self.assertEqual(data.history_files["governments"], {"TST": ["common/history/governments/tst - test.txt"]})
             self.assertEqual(data.governments["TST"], {"ruling_party": "liberal_party"})
@@ -772,6 +794,603 @@ class CountryStartTest(unittest.TestCase):
             self.assertEqual(data.tech_tiers, {1: {"eras": ["era_1"], "techs": ["railways"]}})
             base = data.start_base()
             self.assertEqual(base.text("common/history/governments/tst - test.txt"), GOVERNMENT)
+
+
+STATES = """\
+STATES = {
+	s:STATE_A = {
+		create_state = {
+			country = c:TST
+			owned_provinces = { xA00001 xA00002 }
+		}
+		create_state = {
+			country = c:OTH
+			owned_provinces = { xA00003 xA00004 }
+			state_type = unincorporated
+		}
+		add_homeland = cu:british # the old homeland
+	}
+	s:STATE_B = {
+		create_state = {
+			country = c:TST
+			owned_provinces = { xB00001 xB00002 }
+		}
+		add_claim = c:OTH
+	}
+	s:STATE_C = {
+		create_state = {
+			country = c:OTH
+			owned_provinces = { xC00001 }
+		}
+	}
+}
+"""
+
+POPS = """\
+POPS = {
+	s:STATE_A = {
+		region_state:TST = {
+			create_pop = { culture = british size = 1000 }
+		}
+		region_state:OTH = {
+			create_pop = { culture = french size = 401 }
+			create_pop = { culture = french religion = protestant pop_type = slaves size = 10 }
+		}
+	}
+	s:STATE_B = {
+		region_state:TST = {
+			create_pop = { culture = british size = 600 }
+		}
+	}
+	s:STATE_C = {
+		region_state:OTH = {
+			create_pop = { culture = french size = 300 }
+		}
+	}
+}
+"""
+
+BUILDINGS = """\
+BUILDINGS = {
+	s:STATE_A = {
+		region_state:TST = {
+			create_building = {
+				building = "building_financial_district"
+				add_ownership = { country = { country = "c:TST" levels = 1 } }
+				reserves = 1
+			}
+		}
+	}
+	s:STATE_B = {
+		region_state:TST = {
+			establish_cossack_host = yes
+			create_building = {
+				building = "building_manor_house"
+				add_ownership = { country = { country = "c:TST" levels = 2 } }
+				activate_production_methods = { "pm_a" }
+			}
+			create_building = {
+				building = "building_farm"
+				add_ownership = {
+					building = { type = "building_manor_house" country = "c:TST" levels = 3 region = "STATE_B" }
+					building = { type = "building_financial_district" country = "c:TST" levels = 1 region = "STATE_A" }
+				}
+			}
+		}
+	}
+	s:STATE_C = {
+		region_state:OTH = {
+			create_building = {
+				building = "building_mine"
+				add_ownership = {
+					building = { type = "building_financial_district" country = "c:TST" levels = 2 region = "STATE_A" }
+					country = { country = "c:OTH" levels = 1 }
+				}
+			}
+		}
+	}
+}
+"""
+
+DIPLOMACY = """\
+DIPLOMACY = {
+	c:OTH ?= {
+		set_relations = { country = c:TST value = -30 }
+		set_relations = { country = c:ZZZ value = 10 }
+	}
+}
+"""
+
+TREATIES = """\
+TREATIES = {
+	create_treaty = { first_country = c:TST second_country = c:OTH is_draft = no }
+	create_treaty = { first_country = c:OTH second_country = c:ZZZ is_draft = no }
+}
+"""
+
+
+def world_base():
+    return FakeStartBase({"common/history/states/00_states.txt": STATES, "common/history/pops/00_pops.txt": POPS,
+                          "common/history/buildings/00_buildings.txt": BUILDINGS,
+                          "common/history/diplomacy/00_relations.txt": DIPLOMACY,
+                          "common/history/treaties/00_treaties.txt": TREATIES},
+                         {"STATE_A": ["A00001", "A00002", "A00003", "A00004"], "STATE_B": ["B00001", "B00002"],
+                          "STATE_C": ["C00001"], "STATE_D": ["D00001"]})
+
+
+def territory_start(key, **changes):
+    start = countries.empty_start(key)
+    start.update(changes)
+    return countries.normalize_start(start)
+
+
+def owners_of(building):
+    return [(o["kind"], o["country"], o["region"], o["levels"]) for o in building["ownership"]]
+
+
+class TerritoryTest(unittest.TestCase):
+    def test_read(self):
+        base = world_base()
+        self.assertEqual([(s["country"], s["provinces"], s["unincorporated"]) for s in base.shares["STATE_A"]],
+                         [("TST", ["A00001", "A00002"], False), ("OTH", ["A00003", "A00004"], True)])
+        self.assertEqual((base.homelands, base.claims), ({"STATE_A": ["british"]}, {"STATE_B": ["OTH"]}))
+        self.assertEqual(base.pops["STATE_A"]["OTH"][1], {"culture": "french", "religion": "protestant",
+                                                          "pop_type": "slaves", "size": 10, "extra": ""})
+        farm = base.buildings["STATE_B"]["TST"][1]
+        self.assertEqual(owners_of(farm), [("building", "TST", "STATE_B", 3), ("building", "TST", "STATE_A", 1)])
+        self.assertEqual(base.others["STATE_B"]["TST"], ["establish_cossack_host = yes"])
+        # a building written out reads back the same
+        again = territory.building_from_block(parse("\n".join(territory.building_lines(farm))).get("create_building"))
+        self.assertEqual(again, farm)
+        manor = base.buildings["STATE_B"]["TST"][0]
+        self.assertEqual(manor["pms"], ["pm_a"])
+
+    def test_whole_state_moves_with_pops_and_buildings(self):
+        world = territory.World(world_base(), [territory_start("OTH", gains=["B00001", "B00002"])])
+        self.assertEqual(world.changed_provinces, {"B00001": "OTH", "B00002": "OTH"})
+        self.assertEqual([s["country"] for s in world.shares["STATE_B"]], ["OTH"])
+        self.assertEqual(world.pops[("STATE_B", "TST")], None)
+        self.assertEqual(world.pops[("STATE_B", "OTH")], [{"culture": "british", "religion": "", "pop_type": "",
+                                                           "size": 600, "extra": ""}])
+        manor, farm = world.buildings[("STATE_B", "OTH")]
+        self.assertEqual(owners_of(manor), [("country", "OTH", "", 2)])
+        # the manor moved along, and what TST's district elsewhere held is OTH's now
+        self.assertEqual(owners_of(farm), [("building", "OTH", "STATE_B", 3), ("country", "OTH", "", 1)])
+        self.assertEqual(world.moved, {("STATE_B", "TST"): "OTH"})
+        self.assertEqual(world.vanished, set())
+
+    def test_some_provinces_share_out_the_pops(self):
+        world = territory.World(world_base(), [territory_start("TST", gains=["A00003"])])
+        self.assertEqual([(s["country"], s["provinces"]) for s in world.shares["STATE_A"]],
+                         [("TST", ["A00001", "A00002", "A00003"]), ("OTH", ["A00004"])])
+        sizes = {(p["culture"], p["pop_type"]): p["size"] for p in world.pops[("STATE_A", "TST")]}
+        self.assertEqual(sizes, {("british", ""): 1000, ("french", ""): 200, ("french", "slaves"): 5})
+        self.assertEqual(sum(p["size"] for p in world.pops[("STATE_A", "OTH")]), 206)
+        self.assertNotIn(("STATE_A", "OTH"), world.buildings)  # the buildings stay; OTH has none there
+
+    def test_vanished_country(self):
+        gains = ["A00001", "A00002", "B00001", "B00002"]
+        world = territory.World(world_base(), [territory_start("OTH", gains=gains)])
+        self.assertEqual(world.vanished, {"TST"})
+        # the mine was held by TST's district, which is OTH's now
+        mine = world.buildings[("STATE_C", "OTH")][0]
+        self.assertEqual(owners_of(mine), [("building", "OTH", "STATE_A", 2), ("country", "OTH", "", 1)])
+        texts = diplomacy.write_diplomacy([], world.vanished, world_base(), "mymod", world_base().articles)
+        relations = parse(texts["common/history/diplomacy/00_relations.txt"]).get("DIPLOMACY").get("c:OTH")
+        self.assertEqual([e.value.get("country") for e in relations.entries], ["c:ZZZ"])
+        treaties = parse(texts["common/history/treaties/00_treaties.txt"]).get("TREATIES")
+        self.assertEqual([e.value.get("first_country") for e in treaties.entries], ["c:OTH"])
+
+    def test_released_and_settings(self):
+        start = territory_start("TST", releases=["A00002"], state_types={"STATE_A": "unincorporated"},
+                                homelands={"STATE_A": {"add": ["scottish"], "remove": ["british"]}},
+                                claims={"add": ["STATE_C"], "remove": []})
+        world = territory.World(world_base(), [start])
+        self.assertEqual([(s["country"], s["provinces"], s["unincorporated"]) for s in world.shares["STATE_A"]],
+                         [("TST", ["A00001"], True), ("OTH", ["A00003", "A00004"], True)])
+        self.assertEqual(world.pops[("STATE_A", "TST")][0]["size"], 500)  # half the provinces: half the pops
+        self.assertEqual((world.homelands, world.claims), ({"STATE_A": ["scottish"]}, {"STATE_C": ["TST"]}))
+        text = territory.write_territory(world, world_base(), "mymod")["common/history/states/00_states.txt"]
+        block = parse(text).get("STATES").get("s:STATE_A")
+        self.assertEqual([(e.key, e.value if isinstance(e.value, str) else e.value.get("country")) for e in block.entries],
+                         [("create_state", "c:TST"), ("create_state", "c:OTH"), ("add_homeland", "cu:scottish")])
+        self.assertEqual(block.entries[0].value.get("owned_provinces").items(), ["xA00001"])
+        self.assertEqual(block.entries[0].value.get("state_type"), "unincorporated")
+        self.assertEqual(parse(text).get("STATES").get("s:STATE_C").get("add_claim"), "c:TST")
+        self.assertIn("\t\tadd_claim = c:OTH\n", text)  # the other states stay as they were
+
+    def test_own_lists_and_writing(self):
+        pops = [{"culture": "scottish", "size": 50}]
+        start = territory_start("TST", gains=["C00001", "D00001"], pops={"STATE_C": pops})
+        world = territory.World(world_base(), [start])
+        self.assertEqual([p["culture"] for p in world.pops[("STATE_C", "TST")]], ["scottish"])
+        before = territory.World(world_base(), [start], own_lists_of="TST")
+        self.assertEqual([p["culture"] for p in before.pops[("STATE_C", "TST")]], ["french"])
+        parts = {part["state"]: part for part in before.country("TST")}
+        self.assertEqual(sorted(parts), ["STATE_A", "STATE_B", "STATE_C", "STATE_D"])
+        self.assertEqual((parts["STATE_C"]["moved"], parts["STATE_B"]["moved"]), (True, False))
+        texts = territory.write_territory(world, world_base(), "mymod")
+        self.assertEqual(sorted(texts), ["common/history/buildings/00_buildings.txt", "common/history/pops/00_pops.txt",
+                                         "common/history/states/00_states.txt",
+                                         "common/history/states/zzz_mymod_states.txt"])
+        state_c = parse(texts["common/history/pops/00_pops.txt"]).get("POPS").get("s:STATE_C")
+        self.assertEqual([e.key for e in state_c.entries], ["region_state:TST"])
+        self.assertEqual(state_c.get("region_state:TST").get("create_pop").get("culture"), "scottish")
+        buildings = parse(texts["common/history/buildings/00_buildings.txt"]).get("BUILDINGS")
+        self.assertEqual(buildings.get("s:STATE_C").get("region_state:TST").get("create_building").get("building"),
+                         "building_mine")
+        # a state nobody owned at the start gets its own block
+        fresh = parse(texts["common/history/states/zzz_mymod_states.txt"]).get("STATES").get("s:STATE_D")
+        self.assertEqual(fresh.get("create_state").get("country"), "c:TST")
+        # what did not change stays as it was
+        self.assertIn('building = "building_manor_house"', texts["common/history/buildings/00_buildings.txt"])
+
+    def test_normalize_and_validate(self):
+        game = {"countries": {"TST", "OTH"}, "laws": {}, "groups": set(), "goods": set(), "techs": set(), "igs": set(),
+                "institutions": set(), "parties": set(), "cultures": {"british"}, "states": {"STATE_A"},
+                "religions": {"catholic"}, "hierarchies": set(), "provinces": {"A00001"}, "pop_types": {"slaves"},
+                "buildings": {"building_farm"}, "pms": {"pm_a"}, "companies": set()}
+        good = territory_start("TST", gains=["xa00001"], pops={"STATE_A": [{"culture": "british", "size": 5}]},
+                               buildings={"STATE_A": [{"building": "building_farm", "pms": ["pm_a"], "ownership": [
+                                   {"kind": "country", "country": "OTH", "levels": 2}]}]})
+        self.assertEqual(good["gains"], ["A00001"])
+        self.assertEqual(countries.validate_start(good, game), [])
+        bad = territory_start("TST", gains=["B00001"], homelands={"STATE_X": {"add": ["x"]}},
+                              pops={"STATE_A": [{"culture": "x", "size": 5}]},
+                              buildings={"STATE_A": [{"building": "building_x"}]})
+        self.assertEqual(countries.validate_start(bad, game), ["provinces", "states", "cultures", "pops", "buildings"])
+        for raw in ({"gains": ["nope"]}, {"pops": {"STATE_A": [{"culture": "a", "size": -1}]}},
+                    {"buildings": {"STATE_A": [{"building": "b", "ownership": [{"kind": "x"}]}]}},
+                    {"state_types": {"STATE_A": "sort of"}}):
+            with self.assertRaises(ValueError):
+                countries.normalize_start({"key": "TST", **raw})
+        self.assertFalse(countries.is_empty_start(territory_start("TST", releases=["A00001"])))
+
+
+SUBJECTS = """\
+DIPLOMACY = {
+	c:TST ?= {
+		create_diplomatic_pact = {
+			country = c:SUB
+			type = puppet
+		}
+		add_liberty_desire = -30
+		every_subject_or_below = {
+			set_relations = { country = c:OTH value = 10 }
+		}
+	}
+	c:OTH ?= {
+		create_diplomatic_pact = {
+			country = c:ZZZ
+			type = rivalry
+		}
+	}
+}
+"""
+
+DLC_TREATIES = """\
+TREATIES = {
+	# Alliance
+	if = {
+		limit = { has_dlc_feature = mp1_treaties }
+		create_treaty = {
+			name = treaty_name_x
+			first_country = c:TST
+			second_country = c:OTH
+			is_draft = no
+			entered_into_force_on = 1830.1.1
+			binding_period = { years = 10 }
+			articles_to_create = {
+				{ article = defensive_pact }
+				{
+					article = goods_transfer
+					source_country = c:OTH
+					target_country = c:TST
+					inputs = { { goods = g:wine } { quantity = 20 } }
+				}
+			}
+		}
+	}
+	else = {
+		create_treaty = {
+			name = treaty_name_x
+			first_country = c:TST
+			second_country = c:OTH
+			is_draft = no
+			entered_into_force_on = 1830.1.1
+			articles_to_create = { { article = defensive_pact } }
+		}
+	}
+	create_treaty = {
+		first_country = c:OTH
+		second_country = c:ZZZ
+		entered_into_force_on = 1831.1.1
+		articles_to_create = { { article = treaty_port source_country = c:ZZZ target_country = c:OTH
+			inputs = { { state = s:STATE_C.region_state:ZZZ } } } }
+	}
+}
+"""
+
+CHARACTERS = """\
+CHARACTERS = {
+	c:TST ?= {
+		# Ruler
+		create_character = {
+			template = tst_king
+		}
+
+		create_character = {
+			template = tst_general
+			on_created = { set_variable = x }
+		}
+
+		if = {
+			limit = { exists = c:OTH }
+			create_character = { template = tst_maybe }
+		}
+	}
+}
+"""
+
+
+def relations_base():
+    return FakeStartBase({"common/history/diplomacy/00_relations.txt": DIPLOMACY,
+                          "common/history/diplomacy/00_subjects.txt": SUBJECTS,
+                          "common/history/treaties/00_treaties.txt": DLC_TREATIES,
+                          "common/history/characters/tst.txt": CHARACTERS})
+
+
+def relations_start(key="TST", **changes):
+    start = countries.empty_start(key)
+    start.update(changes)
+    return countries.normalize_start(start)
+
+
+class RelationsTest(unittest.TestCase):
+    def test_read_diplomacy(self):
+        found = []
+        diplomacy.read_diplomacy(parse(SUBJECTS), "x", found)
+        items = [(i["kind"], i["first"], i["second"], i["type"], i["value"]) for i, *_rest in found]
+        # what is inside every_subject_or_below is kept as script
+        self.assertEqual(items, [("pact", "TST", "SUB", "puppet", 0), ("liberty_desire", "TST", "", "", -30),
+                                 ("pact", "OTH", "ZZZ", "rivalry", 0)])
+        again = parse("\n".join(diplomacy.item_lines(found[0][0]))).entries[0]
+        self.assertEqual(diplomacy.item_from_entry("TST", again), found[0][0])
+
+    def test_resolve_and_sync(self):
+        base = [{"kind": "relations", "first": "OTH", "second": "TST", "type": "", "value": -30},
+                {"kind": "relations", "first": "OTH", "second": "ZZZ", "type": "", "value": 10}]
+        tst = relations_start(diplomacy=[{"kind": "relations", "first": "OTH", "second": "TST", "value": -30},
+                                         {"kind": "truce", "first": "TST", "second": "ZZZ", "value": 12}])
+        removed, added = diplomacy.resolve_diplomacy(base, [tst])
+        self.assertEqual(removed, [])  # written again as it was: stays where it was
+        self.assertEqual([(i["kind"], i["second"]) for i in added], [("truce", "ZZZ")])
+        # ZZZ saved later without the truce: TST's list follows
+        zzz = relations_start("ZZZ", diplomacy=[])
+        diplomacy.sync_diplomacy(zzz, [tst])
+        self.assertEqual([i["kind"] for i in tst["diplomacy"]], ["relations"])
+        self.assertEqual(diplomacy.resolve_diplomacy(base, [tst, zzz]), ([1], []))
+        self.assertEqual(diplomacy.resolve_diplomacy(base, [], {"TST"}), ([0], []))
+
+    def test_write_diplomacy(self):
+        base = relations_base()
+        start = relations_start(diplomacy=[
+            {"kind": "pact", "first": "TST", "second": "SUB", "type": "puppet"},
+            {"kind": "pact", "first": "TST", "second": "NEW", "type": "puppet"},
+            {"kind": "relations", "first": "TST", "second": "ZZZ", "value": 50},
+            {"kind": "obligation", "first": "TST", "second": "OTH"},
+            {"kind": "pact", "first": "OTH", "second": "TST", "type": "embargo"}])
+        texts = diplomacy.write_diplomacy([start], set(), base, "mymod", base.articles)
+        tst = parse(texts["common/history/diplomacy/00_subjects.txt"]).get("DIPLOMACY").get("c:TST")
+        # the liberty desire goes (not in the list); what the tool does not know stays
+        self.assertEqual([(e.key, e.value.get("country")) for e in tst.entries],
+                         [("create_diplomatic_pact", "c:SUB"), ("every_subject_or_below", None),
+                          ("create_diplomatic_pact", "c:NEW")])
+        text = texts["common/history/diplomacy/00_relations.txt"]
+        relations = parse(text).get("DIPLOMACY")
+        # OTH's relations with TST go (TST's list has none)
+        self.assertEqual([e.value.get("country") for e in relations.get("c:OTH").entries], ["c:ZZZ"])
+        self.assertIn("\tc:TST ?= {\n\t\tset_relations = { country = c:ZZZ value = 50 }\n\t}\n", text)
+        fresh = parse(texts["common/history/diplomacy/zzz_mymod_diplomacy.txt"]).get("DIPLOMACY")
+        self.assertEqual(fresh.get("c:TST").get("set_owes_obligation_to").get("country"), "c:OTH")
+        # a pact type no file has yet: in the file with most pacts, in OTH's block there
+        other = parse(texts["common/history/diplomacy/00_subjects.txt"]).get("DIPLOMACY").get("c:OTH")
+        self.assertEqual([e.value.get("type") for e in other.entries], ["rivalry", "embargo"])
+
+    def test_treaties(self):
+        base = relations_base()
+        found = []
+        diplomacy.read_treaties(parse(DLC_TREATIES), "t", found)
+        first, port = found[0][0], found[2][0]
+        self.assertEqual((first["id"], first["dlc"], found[1][0]["id"]),
+                         ("TST|OTH|treaty_name_x|1830.1.1", True, "TST|OTH|treaty_name_x|1830.1.1"))
+        self.assertEqual(first["articles"][1], {"article": "goods_transfer", "source": "OTH", "target": "TST",
+                                                "inputs": {"goods": "wine", "quantity": 20}})
+        self.assertEqual(port["articles"][0]["inputs"], {"state": "STATE_C", "state_country": "ZZZ"})
+        added = {"names": {"english": "Pact"}, "second": "OTH", "date": "1836.1.1", "years": 5, "articles": [
+            {"article": "goods_transfer", "source": "TST", "target": "OTH", "inputs": {"goods": "grain", "quantity": 3}},
+            {"article": "treaty_port", "source": "OTH", "target": "TST",
+             "inputs": {"state": "STATE_A", "state_country": "OTH"}}]}
+        start = relations_start(treaties_removed=[first["id"]], treaties_added=[added])
+        texts = diplomacy.write_diplomacy([start], set(), base, "mymod", base.articles)
+        text = texts["common/history/treaties/00_treaties.txt"]
+        # both versions of the DLC condition go, with the condition
+        self.assertEqual([e.key for e in parse(text).get("TREATIES").entries], ["create_treaty"])
+        self.assertIn("\t# Alliance\n\tcreate_treaty", text)
+        new = parse(texts["common/history/treaties/zzz_mymod_treaties.txt"]).get("TREATIES").get("create_treaty")
+        self.assertEqual((new.get("name"), new.get("first_country"), new.get("entered_into_force_on")),
+                         ("mymod_treaty_tst_1", "c:TST", "1836.1.1"))
+        read = diplomacy.treaty_from_block(new)
+        self.assertEqual([a["inputs"] for a in read["articles"]], [{"quantity": 3, "goods": "grain"},
+                                                                   {"state": "STATE_A", "state_country": "OTH"}])
+        self.assertEqual(countries.start_texts(start, "english", "mymod")[1], {"mymod_treaty_tst_1": "Pact"})
+        # a country without land: its treaties go, and the new ones with it are not written
+        texts = diplomacy.write_diplomacy([start], {"OTH"}, base, "mymod", base.articles)
+        self.assertNotIn("common/history/treaties/zzz_mymod_treaties.txt", texts)
+        self.assertEqual(parse(texts["common/history/treaties/00_treaties.txt"]).get("TREATIES").entries, [])
+
+    def test_characters(self):
+        found = characters.read_characters(characters.empty_characters(),
+                                           parse(CHARACTERS).get("CHARACTERS").get("c:TST"))
+        self.assertEqual(found["items"], [{"template": "tst_king", "extra": "", "new": None},
+                                          {"template": "tst_general", "extra": "on_created = { set_variable = x }",
+                                           "new": None}])
+        self.assertEqual(found["other"], 1)
+        new = {"first_name": {"english": "Ann"}, "last_name": {"english": "Lee"}, "culture": "british",
+               "role": "general", "commander_rank": "commander_rank_2", "traits": ["direct"], "female": True}
+        start = relations_start(characters=[found["items"][1], {"new": new}])
+        text = countries.write_starts([start], relations_base(), "mymod")["common/history/characters/tst.txt"]
+        block = parse(text).get("CHARACTERS").get("c:TST")
+        self.assertEqual([e.value.get("template") for e in block.entries if e.key == "create_character"],
+                         ["tst_general", "mymod_tst_character_1"])
+        self.assertEqual(block.get("if").get("create_character").get("template"), "tst_maybe")
+        self.assertNotIn("tst_king", text)
+        self.assertNotIn("}\n\n\t\tcreate_character", text)  # no gap where a character was
+        template = parse(characters.templates_script([start], "mymod")).get("mymod_tst_character_1")
+        self.assertEqual((template.get("first_name"), template.get("female"), template.get("is_general"),
+                          template.get("culture"), template.get("traits").items()),
+                         ("mymod_tst_character_1_first", "yes", "yes", "cu:british", ["direct"]))
+        self.assertEqual(countries.start_texts(start, "english", "mymod")[1],
+                         {"mymod_tst_character_1_first": "Ann", "mymod_tst_character_1_last": "Lee"})
+        # a country without characters gets a block of its own
+        other = relations_start("OTH", characters=[{"template": "tst_king"}])
+        texts = countries.write_starts([other], relations_base(), "mymod")
+        fresh = parse(texts["common/history/characters/zzz_mymod_characters.txt"]).get("CHARACTERS")
+        self.assertEqual(fresh.get("c:OTH").get("create_character").get("template"), "tst_king")
+
+    def test_normalize_and_validate(self):
+        game = {"countries": {"TST", "OTH"}, "laws": {}, "groups": set(), "goods": {"wine"}, "techs": set(),
+                "igs": {"ig_devout"}, "institutions": set(), "parties": set(), "cultures": {"british"},
+                "states": {"STATE_A"}, "religions": set(), "hierarchies": set(), "provinces": set(),
+                "pop_types": set(), "buildings": set(), "pms": set(), "companies": set(), "pact_types": {"puppet"},
+                "articles": relations_base().articles, "regions": set(), "law_types": set(),
+                "templates": {"tst_king"}, "traits": {"direct"}, "ideologies": set()}
+        good = relations_start(
+            diplomacy=[{"kind": "pact", "first": "OTH", "second": "TST", "type": "puppet"},
+                       {"kind": "liberty_desire", "value": -10}],
+            treaties_added=[{"second": "OTH", "date": "1836.1.1", "years": 5, "articles": [
+                {"article": "goods_transfer", "source": "OTH", "target": "TST",
+                 "inputs": {"goods": "wine", "quantity": 1}}]}],
+            characters=[{"template": "tst_king"}, {"new": {"first_name": {"english": "A"},
+                                                           "last_name": {"english": "B"}, "culture": "british",
+                                                           "traits": ["direct"]}}])
+        self.assertEqual(countries.validate_start(good, game), [])
+        self.assertEqual(good["diplomacy"][1], {"kind": "liberty_desire", "first": "TST", "second": "", "type": "",
+                                                "value": -10})
+        self.assertFalse(countries.is_empty_start(relations_start(diplomacy=[])))
+        self.assertTrue(countries.is_empty_start(relations_start()))
+        bad = relations_start(
+            diplomacy=[{"kind": "pact", "first": "TST", "second": "XXX", "type": "puppet"}],
+            treaties_added=[{"second": "OTH", "date": "soon", "years": 5, "articles": [
+                {"article": "goods_transfer", "source": "TST", "target": "TST", "inputs": {"goods": "gold"}}]}],
+            characters=[{"template": "nobody"}, {"new": {"culture": "x", "role": "ig_leader"}}])
+        self.assertEqual(countries.validate_start(bad, game),
+                         ["diplomacy", "treaty_date", "treaty_articles", "treaty_inputs", "character_template",
+                          "character_name", "character_fields"])
+        for raw in ({"diplomacy": [{"kind": "war"}]},
+                    {"diplomacy": [{"kind": "relations", "first": "OTH", "second": "ZZZ", "value": 5}]},
+                    {"diplomacy": [{"kind": "relations", "second": "OTH", "value": 500}]},
+                    {"treaties_added": [{"second": "TST", "years": 1, "articles": []}]},
+                    {"characters": [{"new": {"role": "king"}}]}):
+            with self.assertRaises(ValueError):
+                countries.normalize_start({"key": "TST", **raw})
+
+
+def new_country(**changes):
+    start = {"key": "NEW", "mode": "new", "names": {"english": "New Land"}, "adjs": {"english": "Newish"},
+             "definition": {"color": [10, 20, 30], "country_type": "recognized", "tier": "principality",
+                            "cultures": ["british"], "capital": "STATE_A"},
+             "laws": {"lawgroup_labor_rights": "law_worker_protections"}, "tax_level": "high",
+             "gains": ["A00001"],
+             "flag": {"pattern": "pattern_solid.tga", "colors": ["white", "blue", "red"], "emblems": [
+                 {"kind": "textured", "texture": "mymod_eagle_12345678.dds", "x": 0.5, "y": 0.5, "sx": 1, "sy": 1,
+                  "rotation": 0},
+                 {"kind": "colored", "texture": "ce_star.dds", "colors": ["yellow", "yellow", "red"], "x": 0.25,
+                  "y": 0.3, "sx": -0.4, "sy": 0.4, "rotation": 15}]}}
+    start.update(changes)
+    return countries.normalize_start(start)
+
+
+FLAG_GAME = {"countries": {"TST", "OTH"}, "laws": COUNTRY_LAWS, "groups": set(COUNTRY_LAWS.values()),
+             "goods": set(), "techs": set(), "igs": set(), "institutions": set(), "parties": set(),
+             "cultures": {"british"}, "states": {"STATE_A"}, "religions": set(), "hierarchies": set(),
+             "provinces": {"A00001"}, "pop_types": set(), "buildings": set(), "pms": set(), "companies": set(),
+             "patterns": {"pattern_solid.tga"}, "colored_emblems": {"ce_star.dds"},
+             "textured_emblems": {"mymod_eagle_12345678.dds"}, "coa_colors": {"white", "blue", "red", "yellow"}}
+
+
+class NewCountryTest(unittest.TestCase):
+    def test_normalize_and_validate(self):
+        start = new_country()
+        self.assertEqual((start["mode"], start["flag"]["emblems"][1]["sx"]), ("new", -0.4))
+        self.assertEqual(countries.validate_start(start, FLAG_GAME), [])
+        self.assertFalse(countries.is_empty_start(new_country(gains=[], laws={}, tax_level=None)))
+        bad = new_country(key="TST", names={}, definition={"cultures": []},
+                          flag={"pattern": "pattern_x.dds", "colors": ["white", "blue", "red"]})
+        self.assertEqual(countries.validate_start(bad, FLAG_GAME),
+                         ["key_exists", "color_missing", "country_type", "tier", "cultures", "capital_missing",
+                          "name_missing", "flag"])
+        self.assertEqual(countries.validate_start(new_country(flag=None), FLAG_GAME), ["flag"])
+        for raw in ({"key": "new"}, {"key": "NEWS"}, {"flag": {"pattern": "../x.dds", "colors": ["a", "b", "c"]}},
+                    {"flag": {"pattern": "p.dds", "colors": ["a"]}},
+                    {"flag": {"pattern": "p.dds", "colors": ["a", "b", "c"], "emblems": [{"kind": "colored",
+                                                                                          "texture": "e.dds"}]}}):
+            with self.assertRaises(ValueError):
+                new_country(**raw)
+
+    def test_flag_scripts(self):
+        start = new_country()
+        coa = parse(flags.coat_of_arms_script("NEW", start["flag"])).get("NEW")
+        self.assertEqual((coa.get("pattern"), coa.get("color1"), coa.get("color3")), ("pattern_solid.tga", "white", "red"))
+        # the colours under the pictures
+        self.assertEqual([e.key for e in coa.entries if isinstance(e.value, Block)], ["colored_emblem", "textured_emblem"])
+        instance = coa.get("colored_emblem").get("instance")
+        self.assertEqual((instance.get("position").items(), instance.get("scale").items(), instance.get("rotation")),
+                         (["0.25", "0.3"], ["-0.4", "0.4"], "15"))
+        self.assertIsNone(coa.get("textured_emblem").get("instance"))
+        definition = parse(flags.flag_definition_script("NEW")).get("NEW").get("flag_definition")
+        self.assertEqual((definition.get("coa"), definition.get("priority")), ("NEW", "1"))
+        self.assertEqual(flags.flag_images(start["flag"]), {"gfx/coat_of_arms/textured_emblems/mymod_eagle_12345678.dds"})
+
+    def test_writing(self):
+        start = new_country()
+        definition = parse(countries.new_definition_script(start)).get("NEW")
+        self.assertEqual((definition.get("tier"), definition.get("cultures").items(), definition.get("capital")),
+                         ("principality", ["british"], "STATE_A"))
+        self.assertEqual(countries.start_texts(start, "english", "mymod"), ({}, {"NEW": "New Land", "NEW_ADJ": "Newish"}))
+        texts = countries.write_starts([start], world_base(), "mymod")
+        self.assertEqual(sorted(texts), ["common/history/countries/new - new_land.txt"])
+        block = parse(texts["common/history/countries/new - new_land.txt"]).get("COUNTRIES").get("c:NEW")
+        self.assertEqual((block.get("activate_law"), block.get("set_tax_level")),
+                         ("law_type:law_worker_protections", "high"))
+        # its land is taken like any other country's
+        world = territory.World(world_base(), [start])
+        self.assertEqual(world.owner("A00001"), "NEW")
+
+    def test_missing_countries(self):
+        # a new country without land, and one deleted from the mod, are not named in diplomacy
+        base = world_base()
+        base.countries = {"TST", "OTH", "ZZZ"}
+        landless = new_country(gains=[])
+        tst = territory_start("TST", diplomacy=[{"kind": "relations", "first": "TST", "second": "NEW", "value": 5},
+                                                 {"kind": "relations", "first": "TST", "second": "OLD", "value": 5}])
+        world = territory.World(base, [landless, tst])
+        self.assertEqual(project.missing_countries(world, [landless, tst], base), {"NEW", "OLD"})
+        texts = diplomacy.write_diplomacy([landless, tst], {"NEW", "OLD"}, base, "mymod", base.articles)
+        self.assertNotIn("c:NEW", texts["common/history/diplomacy/00_relations.txt"])
+        self.assertNotIn("c:OLD", texts["common/history/diplomacy/00_relations.txt"])
+
+    def test_textures(self):
+        pixels = bytes(range(256)) * 6  # 4×6 RGBA... as 6×... any size works
+        width, height = 8, 6
+        pixels = bytes((x * 7 + y * 13 + c * 50) % 256 for y in range(height) for x in range(width) for c in range(4))
+        dds = textures.rgba_to_dds(width, height, pixels)
+        self.assertEqual(textures.png_pixels(textures.dds_to_png(dds, 64)), (width, height, pixels))
+        # the smallest mip level is one pixel: 8×6, 4×3, 2×1, 1×1
+        self.assertEqual(len(dds), 128 + 4 * (48 + 12 + 2 + 1))
+        tga = bytes([0, 0, 2]) + bytes(9) + bytes([2, 0, 1, 0, 24, 0]) + bytes([1, 2, 3, 4, 5, 6])  # bottom-up
+        self.assertEqual(textures.png_pixels(textures.to_browser_image(tga, 64, "x.tga")[0])[2],
+                         bytes([3, 2, 1, 255, 6, 5, 4, 255]))
 
 
 class LocalizationTest(unittest.TestCase):
@@ -1157,17 +1776,36 @@ class InterfaceTextTest(unittest.TestCase):
                    "not_found", "name_missing", "browse_unavailable", "bad_path", "unsupported_texture",
                    "forbidden", "open_folder_failed", "image_kind", "image_too_large", "image_format"],
         "sidebar.category.": ["company", "factory", "monument", "law", "law_group", "country_start"],
-        "country.tab.": ["country", "politics", "technology", "other"],
+        "country.tab.": ["country", "politics", "technology", "territory", "pops", "buildings", "diplomacy",
+                         "characters", "other"],
         "country.part.": ["names", "color", "country_type", "tier", "cultures", "capital", "religion", "social_hierarchy",
                           "ig_names", "ruling", "tax_level", "taxed_goods", "tariffs", "institutions", "election",
-                          "ruling_party", "tech_tier", "techs", "wealth", "literacy", "extra"],
+                          "ruling_party", "tech_tier", "techs", "wealth", "literacy", "extra", "territory", "state_types",
+                          "homelands", "claims", "pops", "buildings", "diplomacy", "treaties", "characters", "new"],
+        "territory.mode.": ["province", "state", "claim"],
+        "territory.mode_hint.": ["province", "state", "claim"],
+        "territory.owner.": ["country", "building", "company"],
         "country.via.": ["explicit", "preset", "default", "all", "mine"],
         "country.via_hint.": ["explicit", "default", "all", "mine"],
         "country.wealth.": ["low", "medium", "high", "very_high"],
         "country.literacy.": ["very_low", "low", "baseline", "middling", "high", "very_high"],
         "cproblem.": ["election", "cultures", "country_unknown", "law", "country_type", "tier", "capital", "religion",
                       "social_hierarchy", "tax_level", "wealth", "literacy", "goods", "tariffs", "institutions", "techs",
-                      "igs", "ruling_party"],
+                      "igs", "ruling_party", "provinces", "states", "pops", "buildings", "diplomacy", "treaty_date",
+                      "treaty_country", "treaty_articles", "treaty_inputs", "character_template", "character_name",
+                      "character_birth", "character_fields", "characters", "name_missing", "color_missing",
+                      "key_exists", "flag", "capital_missing"],
+        "flag.": ["x", "y", "sx", "sy", "rotation"],
+        "flag.kind.": ["colored", "textured"],
+        "relations.add.": ["pact", "relations", "truce", "obligation"],
+        "relations.kind.": ["pact", "relations", "truce", "obligation"],
+        "relations.kind_hint.": ["pact", "relations", "truce", "obligation"],
+        "relations.role.": ["overlord", "subject", "actor", "target"],
+        "relations.role_hint.": ["overlord", "subject", "actor", "target"],
+        "relations.role_of.": ["ruler", "heir", "ig_leader", "politician", "general", "admiral", "agitator"],
+        "relations.input.": ["quantity", "goods", "state", "strategic_region", "company", "building_type", "law_type",
+                             "country"],
+        "relations.trait.": ["personality", "skill", "condition"],
         "lgroup.block.": ["enable", "change_allowed_trigger"],
         "lgroup.block_hint.": ["enable", "change_allowed_trigger"],
         "gproblem.": ['key_missing', 'key_invalid', 'key_exists', 'category', 'opinion_impact', 'enactment_days', 'approval_mult', 'hierarchy'],
@@ -1188,6 +1826,10 @@ class InterfaceTextTest(unittest.TestCase):
         "fset.ownership.": ["self", "other", "no_ownership"],
         "fset.warn.": ['aliases', 'buildable', 'expandable', 'ownership_type', 'terrain_manipulator'],
         "fblock.title.": ["potential", "possible"],
+        "picker.tech.": ["production", "military", "society", "other"],
+        "picker.goods.": ["staple", "industrial", "luxury", "military"],
+        "mappicker.hint.": ["states", "regions", "geographic_regions"],
+        "mappicker.click.": ["states", "regions", "geographic_regions", "position"],
         "fproblem.": ["key_missing", "key_invalid", "key_exists", "group_missing", "group_invalid", "icon_missing",
                       "city_type_invalid", "construction_invalid", "braces", "pmgs_missing", "pmg_key_missing",
                       "pmg_key_invalid", "pmg_key_exists", "pmg_empty", "pm_key_missing", "pm_key_invalid",

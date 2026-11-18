@@ -515,6 +515,47 @@ select.input { padding-right: 4px; }
 .country-law { width: 100%; }
 .country-law.current { background: var(--accent-soft); border-radius: var(--radius); }
 .law-group.changed { border-color: var(--accent); }
+/* country starts: territory, pops and buildings */
+.territory-part { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--panel-2); }
+details.territory-part > summary { cursor: pointer; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.territory-items { display: flex; flex-direction: column; gap: 6px; }
+.territory-line { gap: 6px; }
+.territory-line .input { width: auto; flex: 1; min-width: 110px; }
+.territory-line .input.territory-size { flex: none; width: 130px; text-align: right; }
+.input.territory-levels { width: 72px; text-align: right; }
+.territory-building { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: var(--radius);
+  background: var(--panel); }
+.territory-owner { gap: 6px; padding-left: 40px; }
+.territory-owner > select.input { width: auto; }
+.territory-pms { gap: 6px; padding-left: 40px; }
+.territory-pms .input { width: auto; max-width: 260px; }
+/* country starts: diplomacy, treaties and characters */
+.relations-group { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
+.relations-group h4 { margin: 0; }
+.relations-group .country-line > select.input { width: auto; max-width: 240px; }
+.relations-group .country-line > .input.territory-levels { flex: none; width: 90px; min-width: 0; }
+.relations-new .field > .btn, .relations-treaty .field > .btn { align-self: flex-start; }
+.relations-treaty { gap: 4px; margin-bottom: 8px; }
+.relations-treaty.removed { opacity: 0.6; }
+.relations-treaty.own { border-color: var(--accent); }
+.relations-treaty .territory-building select.input { width: auto; max-width: 280px; }
+.relations-articles { margin: 0; padding-left: 20px; }
+.relations-extra > summary { cursor: pointer; }
+.relations-new { border: 1px solid var(--accent); }
+/* country starts: flags of new countries */
+canvas.country-flag { display: block; width: 100%; height: auto; }
+.country-row-flag { flex: none; width: 22px; height: 15px; border-radius: 2px; border: 1px solid var(--line); }
+.flag-top { align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.flag-preview { width: 384px; max-width: 100%; height: auto; aspect-ratio: 3 / 2; border: 1px solid var(--line);
+  border-radius: var(--radius); }
+.flag-base { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
+.flag-base .field > .btn { align-self: flex-start; }
+.flag-color { gap: 6px; }
+.flag-color .input { width: auto; }
+.flag-thumb { width: 40px; height: 40px; object-fit: contain; background: var(--panel-3); border-radius: 2px; }
+.input.flag-number { width: 76px; text-align: right; }
+.country-code { font-family: var(--mono, monospace); font-size: 22px; letter-spacing: 2px; }
 .side-strip {
   flex: 1;
   display: flex;
@@ -782,6 +823,58 @@ textarea.script.invalid { border-color: var(--bad); }
 .picker-name, .picker-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .picker-sub { font-size: 11.5px; color: var(--muted); }
 .picker-more { grid-column: 1 / -1; }
+.picker-tools .input.picker-filter { flex: 0 1 auto; min-width: 0; width: auto; max-width: 220px; }
+.picker-tabs { flex: none; }
+/* a bar over the items of a section (an era, an industry): click to open or close it */
+.picker-group {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 4px 8px;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  background: var(--panel-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.picker-group:first-child { margin-top: 0; }
+.picker-group:hover { border-color: var(--accent); }
+.picker-group-arrow { width: 12px; color: var(--muted); }
+
+/* the map window: the map, and beside it the search and what is chosen */
+.modal.map-picker { width: min(1320px, 96vw); }
+.map-picker-body { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 12px; min-height: 0; }
+.map-picker-body .map { max-height: 68vh; }
+.map-picker-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; max-height: 68vh; }
+.map-picker-results, .map-picker-chosen { display: flex; flex-direction: column; gap: 2px; overflow: auto; min-height: 0; }
+.map-picker-results { flex: 1 1 auto; }
+.map-picker-chosen { flex: 0 1 auto; max-height: 40%; padding-top: 6px; border-top: 1px solid var(--line); }
+.map-picker-row { display: flex; align-items: center; gap: 4px; border: 1px solid transparent; border-radius: var(--radius); }
+.map-picker-row.selected { border-color: var(--accent); background: var(--accent-soft); }
+.map-picker-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 3px 6px;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.map-picker-name:hover { color: var(--accent); }
+.map-picker-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-picker-within { gap: 6px; }
+@media (max-width: 760px) {
+  .map-picker-body { grid-template-columns: minmax(0, 1fr); }
+  .map-picker-side { max-height: 32vh; }
+}
 .modal-large { width: min(1080px, 94vw); }
 .picker-roomy { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 .picker-roomy .picker-name, .picker-roomy .picker-sub {

@@ -38,6 +38,8 @@ POPULATION_FIELDS = ("wealth", "literacy")
 ALL_COUNTRIES = "*"
 DATE_PATTERN = re.compile(r"^\d{1,4}\.\d{1,2}\.\d{1,2}$")
 TAG_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+NEW_TAG_PATTERN = re.compile(r"^[A-Z][A-Z0-9]{2}$")  # the tag of a new country: three letters or digits
+PROVINCE_PATTERN = re.compile(r"^[0-9A-F]{6}$")
 _TECH_TIER = re.compile(r"^effect_starting_technology_tier_(\d)_tech$")
 _WEALTH = re.compile(r"^effect_starting_pop_wealth_(\w+)$")
 _LITERACY = re.compile(r"^effect_starting_pop_literacy_(\w+)$")
@@ -48,6 +50,7 @@ HISTORY_DIRS = {
     "countries": ("common/history/countries", "COUNTRIES"),
     "population": ("common/history/population", "POPULATION"),
     "governments": ("common/history/governments", "GOVERNMENT"),
+    "characters": ("common/history/characters", "CHARACTERS"),
 }
 
 
@@ -301,19 +304,40 @@ def tech_tier_techs(block):
 
 # --------------------------------------------------------------- the model
 
+def is_country(start):
+    """A start of one country: of the game's ("override") or a new one of the mod ("new")."""
+    return start.get("mode") in ("override", "new")
+
+
 def empty_start(key="", mode="override"):
-    """What a mod changes in one country's start. None (and missing laws) leave the game's as it is."""
+    """What a mod changes in one country's start. None (and missing laws) leave the game's as it is.
+
+    The territory fields are described in territory.py, diplomacy and treaties in diplomacy.py,
+    characters in characters.py, the flag of a new country in flags.py. A new country ("new") has its
+    whole definition in `definition`, and no history of the game's.
+    """
     return {"key": key, "mode": mode, "names": {}, "adjs": {}, "defs": {}, "definition": {}, "laws": {},
             "ig_names": {}, "ruling_party": None, **{name: None for name in HISTORY_FIELDS},
-            **{name: None for name in POPULATION_FIELDS}}
+            **{name: None for name in POPULATION_FIELDS},
+            "gains": [], "releases": [], "state_types": {}, "homelands": {}, "claims": {"add": [], "remove": []},
+            "pops": {}, "buildings": {},
+            "diplomacy": None, "treaties_added": [], "treaties_removed": [], "characters": None, "flag": None}
 
 
 def fill_start(stored):
     """A country start from a project file, with fields added by later versions of the tool filled in."""
     start = {**empty_start(), **stored}
-    for name in ("names", "adjs", "defs", "definition", "laws", "ig_names"):
-        if not isinstance(start.get(name), dict):
-            start[name] = {}
+    blank = empty_start()
+    for name in ("names", "adjs", "defs", "definition", "laws", "ig_names", "state_types", "homelands", "claims",
+                 "pops", "buildings", "gains", "releases", "treaties_added", "treaties_removed"):
+        if not isinstance(start.get(name), type(blank[name])):
+            start[name] = blank[name]
+    start["claims"] = {"add": [], "remove": [], **start["claims"]}
+    for name in ("diplomacy", "characters"):
+        if not isinstance(start.get(name), list):
+            start[name] = None
+    if not isinstance(start.get("flag"), dict):
+        start["flag"] = None
     return start
 
 
@@ -332,9 +356,9 @@ def _keys(values, field):
 
 def normalize_start(raw):
     """Bring a country start sent by the browser into the model's shape (ValueError when it cannot be)."""
-    mode = "all" if raw.get("mode") == "all" else "override"
+    mode = raw.get("mode") if raw.get("mode") in ("all", "new") else "override"
     start = empty_start(ALL_COUNTRIES if mode == "all" else str(raw.get("key") or "").strip(), mode)
-    if mode == "override" and not TAG_PATTERN.match(start["key"]):
+    if mode != "all" and not (NEW_TAG_PATTERN if mode == "new" else TAG_PATTERN).match(start["key"]):
         raise ValueError("key")
     laws = raw.get("laws") or {}
     if not isinstance(laws, dict):
@@ -396,14 +420,107 @@ def normalize_start(raw):
                                   "level": int(r.get("level") or 0)} for r in rows]
     if raw.get("extra") is not None:
         start["extra"] = str(raw["extra"]).replace("\r\n", "\n")
+    _normalize_territory(start, raw)
+    from .characters import normalize_characters
+    from .diplomacy import normalize_diplomacy
+    normalize_diplomacy(start, raw)
+    normalize_characters(start, raw)
+    if mode == "new":
+        from .flags import normalize_flag
+        start["flag"] = normalize_flag(raw.get("flag")) if raw.get("flag") is not None else None
     return start
 
 
+def _provinces(values, field):
+    if not isinstance(values, list):
+        raise ValueError(field)
+    found = []
+    for value in values:
+        value = str(value or "").strip().lstrip("xX").upper()
+        if not PROVINCE_PATTERN.match(value):
+            raise ValueError(field)
+        found.append(value)
+    return list(dict.fromkeys(found))
+
+
+def _dict(raw, field):
+    value = raw.get(field) or {}
+    if not isinstance(value, dict):
+        raise ValueError(field)
+    return value
+
+
+def _rows(value, field):
+    if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
+        raise ValueError(field)
+    return value
+
+
+def _count(value, field, low=0):
+    if isinstance(value, bool) or not isinstance(value, int) or value < low:
+        raise ValueError(field)
+    return value
+
+
+def normalize_pop(raw):
+    return {"culture": _key(raw.get("culture"), "pops"), "religion": _key(raw.get("religion"), "pops"),
+            "pop_type": _key(raw.get("pop_type"), "pops"), "size": _count(raw.get("size"), "pops"),
+            "extra": str(raw.get("extra") or "").replace("\r\n", "\n")}
+
+
+def normalize_building(raw):
+    owners = []
+    for owner in _rows(raw.get("ownership") or [], "buildings"):
+        kind = owner.get("kind")
+        if kind not in ("country", "building", "company"):
+            raise ValueError("buildings")
+        owners.append({"kind": kind, "country": _key(owner.get("country"), "buildings"),
+                       "type": _key(owner.get("type"), "buildings") if kind != "country" else "",
+                       "region": _key(owner.get("region"), "buildings") if kind == "building" else "",
+                       "levels": _count(owner.get("levels"), "buildings", 1)})
+    reserves, subsidized = raw.get("reserves"), raw.get("subsidized")
+    return {"building": _key(raw.get("building"), "buildings"), "level": _count(raw.get("level") or 0, "buildings"),
+            "ownership": owners, "reserves": None if reserves is None else _count(reserves, "buildings"),
+            "pms": _keys(raw.get("pms") or [], "buildings"),
+            "subsidized": None if subsidized is None else bool(subsidized),
+            "extra": str(raw.get("extra") or "").replace("\r\n", "\n")}
+
+
+def _normalize_territory(start, raw):
+    start["gains"] = _provinces(raw.get("gains") or [], "gains")
+    start["releases"] = _provinces(raw.get("releases") or [], "releases")
+    for state, kind in _dict(raw, "state_types").items():
+        if kind not in ("incorporated", "unincorporated"):
+            raise ValueError("state_types")
+        start["state_types"][_key(state, "state_types")] = kind
+    for state, change in _dict(raw, "homelands").items():
+        if not isinstance(change, dict):
+            raise ValueError("homelands")
+        add, remove = _keys(change.get("add") or [], "homelands"), _keys(change.get("remove") or [], "homelands")
+        if add or remove:
+            start["homelands"][_key(state, "homelands")] = {"add": add, "remove": remove}
+    claims = _dict(raw, "claims")
+    start["claims"] = {"add": _keys(claims.get("add") or [], "claims"),
+                       "remove": _keys(claims.get("remove") or [], "claims")}
+    for state, pops in _dict(raw, "pops").items():
+        start["pops"][_key(state, "pops")] = [normalize_pop(pop) for pop in _rows(pops, "pops")]
+    for state, buildings in _dict(raw, "buildings").items():
+        start["buildings"][_key(state, "buildings")] = [normalize_building(b) for b in _rows(buildings, "buildings")]
+
+
+def has_territory_changes(start):
+    return bool(start["gains"] or start["releases"] or start["state_types"] or start["homelands"]
+                or start["claims"]["add"] or start["claims"]["remove"] or start["pops"] or start["buildings"])
+
+
 def is_empty_start(start):
-    """True when a start changes nothing (everything was put back as the game has it)."""
-    return (not any(start[name] for name in ("names", "adjs", "defs", "definition", "laws", "ig_names"))
-            and start["ruling_party"] is None
-            and all(start[name] is None for name in (*HISTORY_FIELDS, *POPULATION_FIELDS)))
+    """True when a start changes nothing (everything was put back as the game has it). A new country
+    is never empty: it is there until it is deleted."""
+    return start["mode"] != "new" and (not any(start[name] for name in ("names", "adjs", "defs", "definition", "laws", "ig_names",
+                                             "treaties_added", "treaties_removed"))
+            and start["ruling_party"] is None and start["diplomacy"] is None and start["characters"] is None
+            and all(start[name] is None for name in (*HISTORY_FIELDS, *POPULATION_FIELDS))
+            and not has_territory_changes(start))
 
 
 def validate_start(start, game):
@@ -416,6 +533,15 @@ def validate_start(start, game):
     errors = []
     if start["mode"] == "override" and start["key"] not in game["countries"]:
         errors.append("country_unknown")
+    if start["mode"] == "new":
+        if start["key"] in game["countries"]:
+            errors.append("key_exists")
+        definition = start["definition"]
+        for name in ("color", "country_type", "tier", "cultures", "capital"):
+            if not definition.get(name):
+                errors.append({"color": "color_missing", "capital": "capital_missing"}.get(name, name))
+        if not any(start["names"].values()):
+            errors.append("name_missing")
     for group, law in start["laws"].items():
         if game["laws"].get(law) != group or group not in game["groups"]:
             errors.append("law")
@@ -457,6 +583,45 @@ def validate_start(start, game):
         errors.append("ruling_party")
     if start["extra"] is not None and not braces_balanced(start["extra"]):
         errors.append("braces:extra")
+    errors += _territory_errors(start, game)
+    if start["mode"] == "new" and "patterns" in game:  # stage 4 (the flag of a new country)
+        from .flags import flag_errors
+        errors += flag_errors(start["flag"], game)
+    if "articles" in game:  # stage 3 (diplomacy, treaties and characters)
+        from .characters import character_errors
+        from .diplomacy import diplomacy_errors
+        errors += diplomacy_errors(start, game) + character_errors(start, game)
+    return list(dict.fromkeys(errors))
+
+
+def _territory_errors(start, game):
+    """`game` also has "provinces", "pop_types", "buildings", "pms", "companies" (sets of keys)."""
+    errors = []
+    if any(p not in game["provinces"] for p in [*start["gains"], *start["releases"]]):
+        errors.append("provinces")
+    states = [*start["state_types"], *start["homelands"], *start["claims"]["add"], *start["claims"]["remove"],
+              *start["pops"], *start["buildings"]]
+    if any(state not in game["states"] for state in states):
+        errors.append("states")
+    if any(c not in game["cultures"] for change in start["homelands"].values() for c in change["add"]):
+        errors.append("cultures")
+    pops = [pop for pops in start["pops"].values() for pop in pops]
+    if any(pop["culture"] not in game["cultures"] or (pop["religion"] and pop["religion"] not in game["religions"])
+           or (pop["pop_type"] and pop["pop_type"] not in game["pop_types"]) for pop in pops):
+        errors.append("pops")
+    buildings = [b for items in start["buildings"].values() for b in items]
+    for building in buildings:
+        bad_owner = any(owner["country"] not in game["countries"]
+                        or (owner["kind"] == "building" and (owner["type"] not in game["buildings"]
+                                                             or owner["region"] not in game["states"]))
+                        or (owner["kind"] == "company" and owner["type"] not in game["companies"])
+                        for owner in building["ownership"])
+        if (building["building"] not in game["buildings"] or bad_owner
+                or any(pm not in game["pms"] for pm in building["pms"])):
+            errors.append("buildings")
+            break
+    if any(not braces_balanced(item["extra"]) for item in [*pops, *buildings]):
+        errors.append("braces:extra")
     return errors
 
 
@@ -490,8 +655,13 @@ class Patcher:
         self.text = text
         self.edits = []  # (start, end, replacement)
 
-    def remove(self, entry):
+    def remove(self, entry, blank=False):
+        """Take a statement out; `blank`: with the empty line before it, when it is on lines of its own."""
         start, end = _line_span(self.text, entry.start, entry.end)
+        if blank and start != entry.start and start > 0:
+            before = self.text.rfind("\n", 0, start - 1) + 1
+            if not self.text[before:start].strip():
+                start = before
         self.edits.append((start, end, ""))
 
     def replace(self, entry, lines):
@@ -520,11 +690,24 @@ class Patcher:
                                + _indent_of(self.text, block.start)))
 
     def result(self):
+        # the same statement taken out twice counts once, and nothing is done inside what is taken out
+        # (as a treaty of a DLC condition that goes as a whole)
+        cuts = sorted({(start, end) for start, end, replacement in self.edits if not replacement and end > start})
+        edits, seen = [], set()
+        for start, end, replacement in self.edits:
+            if not replacement and (start, end) in seen:
+                continue
+            if any((s < start < e) if start == end else (s <= start and end <= e and (s, e) != (start, end))
+                   for s, e in cuts):
+                continue
+            if not replacement:
+                seen.add((start, end))
+            edits.append((start, end, replacement))
         # from the end of the file; of edits at one place the later one first, so they come out in order
         text = self.text
-        order = sorted(range(len(self.edits)), key=lambda i: (self.edits[i][0], self.edits[i][1], i), reverse=True)
+        order = sorted(range(len(edits)), key=lambda i: (edits[i][0], edits[i][1], i), reverse=True)
         for i in order:
-            start, end, replacement = self.edits[i]
+            start, end, replacement = edits[i]
             text = text[:start] + replacement + text[end:]
         return text
 
@@ -827,6 +1010,21 @@ def definition_script(key, raw, changes):
     return f"REPLACE_OR_CREATE:{patcher.result()}"
 
 
+def new_definition_script(start):
+    """The definition of a new country (a plain definition: the tag is not the game's)."""
+    definition = start["definition"]
+    color = definition.get("color") or [128, 128, 128]
+    lines = [f"color = {{ {color[0]} {color[1]} {color[2]} }}"]
+    for name in ("country_type", "tier"):
+        if definition.get(name):
+            lines.append(f"{name} = {definition[name]}")
+    lines.append("cultures = { " + " ".join(definition.get("cultures") or []) + " }")
+    for name in ("capital", "religion", "social_hierarchy"):
+        if definition.get(name):
+            lines.append(f"{name} = {definition[name]}")
+    return "\n".join(_scoped_block_lines(f"{start['key']} =", lines))
+
+
 def global_laws_script(all_laws, starts):
     """The laws every country starts with, then the countries the mod set a law of those groups for."""
     if not all_laws:
@@ -847,24 +1045,40 @@ def global_laws_script(all_laws, starts):
 def start_texts(start, lang, slug):
     """Localization of one start in one language: (replaced texts, new texts).
 
-    The country's names replace the game's; names of interest groups are new keys.
+    The country's names replace the game's (a new country's are new keys); names of interest groups,
+    treaties and new characters are new keys.
     """
+    from .characters import character_texts
+    from .diplomacy import start_treaty_texts
     replaced, new = {}, {}
+    names = new if start["mode"] == "new" else replaced
     for field, suffix in (("names", ""), ("adjs", "_ADJ"), ("defs", "_DEF")):
         if start[field].get(lang):
-            replaced[start["key"] + suffix] = start[field][lang]
+            names[start["key"] + suffix] = start[field][lang]
     for ig, texts in start["ig_names"].items():
         if texts.get(lang):
             new[ig_name_key(slug, start["key"], ig)] = texts[lang]
+    new.update(start_treaty_texts(start, lang, slug))
+    new.update(character_texts(start, lang, slug))
     return replaced, new
 
 
 def start_languages(start):
+    from .characters import character_languages
     return {lang for field in ("names", "adjs", "defs") for lang, text in start[field].items() if text} | {
-        lang for texts in start["ig_names"].values() for lang, text in texts.items() if text}
+        lang for texts in start["ig_names"].values() for lang, text in texts.items() if text} | {
+        lang for treaty in start["treaties_added"] for lang, text in treaty["names"].items() if text} | (
+        character_languages(start))
 
 
 # ------------------------------------------------------------------ writing
+
+def new_file_name(start):
+    """The history files of a new country: `<tag> - <English name, else the first name>.txt`."""
+    name = start["names"].get("english") or next((n for n in start["names"].values() if n), "") or start["key"]
+    name = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or start["key"].lower()
+    return f"{start['key'].lower()} - {name}.txt"
+
 
 def write_starts(starts, base, slug):
     """The history files a mod's country starts need: {game-relative path: text}.
@@ -873,7 +1087,8 @@ def write_starts(starts, base, slug):
     the country's block (in load order), base.text(path) -> the file's text, base.law_group(law),
     base.ruling(tag) -> the ruling interest groups of its history.
     """
-    starts = [s for s in starts if s["mode"] == "override"]
+    from .characters import create_lines, patch_characters
+    starts = [s for s in starts if is_country(s)]
     texts = {}
     patchers = {}
 
@@ -901,13 +1116,19 @@ def write_starts(starts, base, slug):
                            lambda scopes: patch_population(scopes, start), lambda: population_lines(start)),
             "governments": (start["ruling_party"] is not None,
                             lambda scopes: patch_government(scopes, start), lambda: government_lines(start)),
+            "characters": (start["characters"] is not None,
+                           lambda scopes: patch_characters(scopes, start, slug), lambda: create_lines(start, slug)),
         }
         for kind, (wanted, patch, lines) in parts.items():
             if not wanted:
                 continue
-            scopes = scopes_of(kind, tag)
+            scopes = scopes_of(kind, tag) if start["mode"] == "override" else []
             if scopes:
                 patch(scopes)
+            elif lines() and start["mode"] == "new":  # a new country has files of its own
+                folder, top = HISTORY_DIRS[kind]
+                body = "".join(f"\t{line}\n" for line in _scoped_block_lines(f"c:{tag} ?=", lines()))
+                texts[f"{folder}/{new_file_name(start)}"] = f"{top} = {{\n{body}}}\n"
             elif lines():
                 fresh[kind].append(_scoped_block_lines(f"c:{tag} ?=", lines()))
     for rel, (patcher, _root) in patchers.items():

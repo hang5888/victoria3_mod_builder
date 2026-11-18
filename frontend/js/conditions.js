@@ -5,8 +5,9 @@
 // become "script" rows that keep their original text, so nothing is lost.
 import { t } from './i18n.js';
 import { store, nameOf } from './store.js';
-import { h, openPicker } from './ui.js';
-import { objectIcon, pickerIcon } from './icons.js';
+import { h } from './ui.js';
+import { objectIcon } from './icons.js';
+import { chooseObjects } from './choose.js';
 import { parseScript, dedent, blockText, isBlock, bracesBalanced } from './script.js';
 
 // Row kinds offered in each place.
@@ -246,23 +247,14 @@ export function clearConditionCache() {
   cache.clear();
 }
 
-function itemsOf(kind) {
-  return store.data[kind].filter((item) => !item.sea).map((item) => ({
-    key: item.key, name: item.name || item.key,
-    sub: item.group_name || (item.era && t('cond.era', { n: item.era })) || (item.region && nameOf('regions', item.region))
-      || item.key,
-  }));
-}
-
-// A button showing the chosen game objects; clicking it opens a picker.
-export function valueButton({ kind, keys, multi = false, title, placeholder = t('common.choose'), onDone }) {
+// A button showing the chosen game objects; clicking it opens a picker (the map, for regions).
+// `map`: what else the map window takes (see openMapPicker).
+export function valueButton({ kind, keys, multi = false, title, placeholder = t('common.choose'), map, onDone }) {
   const shown = keys.slice(0, 3).map((key) => h('span', { class: 'cond-value' }, objectIcon(kind, key), nameOf(kind, key)));
   return h('button', {
     class: 'btn cond-pick' + (keys.length ? '' : ' empty'),
     title: keys.join(', '),
-    onclick: () => openPicker({
-      title, multi, selected: keys, icon: pickerIcon(kind), items: itemsOf(kind), onDone,
-    }),
+    onclick: () => chooseObjects({ kind, title, multi, selected: keys, map, onDone }),
   }, keys.length ? [shown, keys.length > 3 && h('span', { class: 'muted' }, `+${keys.length - 3}`)] : placeholder);
 }
 

@@ -10,7 +10,13 @@ import shutil
 from pathlib import Path
 
 from .companies import LANGUAGE_PATTERN, company_to_script, empty_company
-from .countries import definition_script, fill_start, global_laws_script, start_languages, start_texts, write_starts
+from .countries import (definition_script, fill_start, global_laws_script, is_country, new_definition_script,
+                        start_languages, start_texts, write_starts)
+from .flags import TEXTURED_DIR, coat_of_arms_script, flag_definition_script, flag_images
+from .textures import UnsupportedTexture, png_pixels, rgba_to_dds
+from .territory import World, write_territory
+from .characters import templates_script
+from .diplomacy import write_diplomacy
 from .factories import (factory_to_script, fill_factory, modifier_texts, own_pmgs, own_pms, pm_to_script,
                         pmg_to_script)
 from .laws import fill_law, fill_law_group, law_group_to_script, law_texts, law_to_script
@@ -31,6 +37,9 @@ IMAGE_KINDS = {
     "pmg_icon": (120, 120, "contain"),
     "pm_icon": (104, 104, "contain"),
     "law_icon": (302, 302, "contain"),
+    # a picture on a new country's flag: the flag's shape, written as an uncompressed DDS with mipmaps
+    # into the folder the game finds the coat of arms pictures in (by file name)
+    "coa_emblem": (768, 512, "contain"),
 }
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -155,8 +164,9 @@ def _write_texts(root, slug, kind, items, texts, generated):
 
 def _image_ok(image):
     """An image entry of the project file that can be used as a path (the file may be tampered with)."""
+    folder = (re.escape(TEXTURED_DIR) if image.get("kind") == "coa_emblem" else r"gfx/interface/icons/[a-z0-9_]+")
     return (image.get("kind") in IMAGE_KINDS and re.fullmatch(r"[a-z0-9_]+\.(png|dds)", str(image.get("file", "")))
-            and re.fullmatch(r"gfx/interface/icons/[a-z0-9_]+/[a-z0-9_]+\.(png|dds)", str(image.get("path", ""))))
+            and re.fullmatch(folder + r"/[a-z0-9_]+\.(png|dds)", str(image.get("path", ""))))
 
 
 def image_slug(name):
@@ -181,9 +191,21 @@ def add_image(project_dir, kind, name, data):
         raise ValueError("format")
     root = Path(project_dir)
     project = load_project(root)
-    # the content hash keeps names unique, so a cached picture is never a different image
-    file = f"{kind}_{image_slug(Path(str(name)).stem)}_{hashlib.sha1(data).hexdigest()[:8]}.{suffix}"
-    image = {"kind": kind, "file": file, "path": f"gfx/interface/icons/{project['slug']}_images/{file}"}
+    digest = hashlib.sha1(data).hexdigest()[:8]
+    if kind == "coa_emblem":
+        if suffix == "png":
+            try:
+                data = rgba_to_dds(*png_pixels(data))
+            except (UnsupportedTexture, ValueError, IndexError):
+                raise ValueError("format")
+            suffix = "dds"
+        # flags find their pictures by file name in one folder of every mod: the mod's name keeps it apart
+        file = f"{project['slug']}_{image_slug(Path(str(name)).stem)}_{digest}.dds"
+        image = {"kind": kind, "file": file, "path": f"{TEXTURED_DIR}/{file}"}
+    else:
+        # the content hash keeps names unique, so a cached picture is never a different image
+        file = f"{kind}_{image_slug(Path(str(name)).stem)}_{digest}.{suffix}"
+        image = {"kind": kind, "file": file, "path": f"gfx/interface/icons/{project['slug']}_images/{file}"}
     staging = root / IMAGE_STAGING
     staging.mkdir(exist_ok=True)
     (staging / file).write_bytes(data)
@@ -214,31 +236,69 @@ def used_images(project):
         used.update((building.get("icon"), building.get("background")))
     used.update(item.get("texture") for item in [*own_pmgs(buildings), *own_pms(buildings)])
     used.update(law.get("icon") for law in project.get("laws", []))
+    for start in project.get("country_starts", []):
+        if start.get("mode") == "new":
+            used.update(flag_images(start.get("flag")))
     return used
 
 
 def _start_file(rel, slug):
     """True for the files the country starts write."""
-    return rel.startswith(("common/history/", "common/country_definitions/")) or f"/{slug}_countries_" in rel
+    return (rel.startswith(("common/history/", "common/country_definitions/"))
+            or rel in (f"common/character_templates/zzz_{slug}_characters.txt",
+                       f"common/flag_definitions/zzz_{slug}_flags.txt",
+                       f"common/coat_of_arms/coat_of_arms/zzz_{slug}_coat_of_arms.txt")
+            or f"/{slug}_countries_" in rel)
+
+
+def missing_countries(world, countries, base):
+    """Countries that are not there at the start, whose diplomacy and treaties are not written: those left
+    without land, new ones without land yet, and new ones deleted since other starts named them."""
+    missing = set(world.vanished)
+    new = {s["key"] for s in countries if s["mode"] == "new"}
+    missing |= {tag for tag in new if not world.country_states(tag)}
+    known = getattr(base, "countries", None)
+    if known is not None:
+        named = {tag for s in countries for item in s.get("diplomacy") or [] for tag in (item["first"], item["second"])}
+        named |= {s.get("second", "") for start in countries for s in start.get("treaties_added") or []}
+        missing |= {tag for tag in named if tag and tag not in known and tag not in new}
+    return missing
 
 
 def _write_country_starts(root, slug, starts, base, generated):
     """Country starts: the overridden definitions, their names, the history files they change (copies of
-    the files in effect, see countries.write_starts) and the laws every country starts with."""
-    countries = [s for s in starts if s["mode"] == "override"]
+    the files in effect, see countries.write_starts), the templates of new characters and the laws every
+    country starts with."""
+    countries = [s for s in starts if is_country(s)]
     everyone = next((s for s in starts if s["mode"] == "all"), None)
     definitions = []
     for start in countries:
+        if start["mode"] == "new":
+            definitions.append(new_definition_script(start))
+            continue
         raw = base.definition(start["key"]) if start["definition"] else None
         if raw is not None:
             definitions.append(definition_script(start["key"], raw, start["definition"]))
     _write_script(root, f"common/country_definitions/zzz_{slug}_countries.txt", definitions, generated)
-    for rel, text in sorted(write_starts(countries, base, slug).items()):
+    # the flags of new countries: a coat of arms and a flag definition each
+    flagged = [s for s in countries if s["mode"] == "new" and s.get("flag")]
+    _write_script(root, f"common/coat_of_arms/coat_of_arms/zzz_{slug}_coat_of_arms.txt",
+                  [coat_of_arms_script(s["key"], s["flag"]) for s in flagged], generated)
+    _write_script(root, f"common/flag_definitions/zzz_{slug}_flags.txt",
+                  [flag_definition_script(s["key"]) for s in flagged], generated)
+    texts = write_starts(countries, base, slug)
+    world = World(base, countries)
+    texts.update(write_territory(world, base, slug))
+    texts.update(write_diplomacy(countries, missing_countries(world, countries, base), base, slug, base.articles))
+    for rel, text in sorted(texts.items()):
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8-sig", newline="\n") as f:
             f.write(text if text.endswith("\n") else text + "\n")
         generated.append(rel)
+    templates = templates_script(countries, slug)
+    _write_script(root, f"common/character_templates/zzz_{slug}_characters.txt", [templates] if templates else [],
+                  generated)
     script = global_laws_script(everyone["laws"], countries) if everyone else None
     _write_script(root, f"common/history/global/zzz_{slug}_start.txt", [script] if script else [], generated)
     for lang in sorted({lang for start in countries for lang in start_languages(start)}):

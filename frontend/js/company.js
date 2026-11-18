@@ -6,7 +6,6 @@ import { store, refreshState, loadData, language, languageName, nameOf, companyN
   keptImages } from './store.js';
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
 import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
-import { StateMap } from './map.js';
 import { ICON_KINDS, thumb } from './icons.js';
 import { run, section, field, objectChip, sourceName, sourceBadges, keyChips, imageField as imagePicker,
   scriptArea as scriptBox, formatModifier } from './widgets.js';
@@ -31,9 +30,6 @@ let editing = null;        // the company in the editor
 let originalKey = null;    // its key in the project file, when it was opened from there
 let editingProject = null; // folder of the project `editing` belongs to
 let dirty = false;
-let hqMap = null;
-let hqMapData = null;
-let showMarkers = true;
 const filters = { query: '', source: '', building: '', region: '', prestige: '' };
 let listed = [];           // existing companies in the order they are listed
 let listLimit = PAGE;
@@ -446,30 +442,12 @@ function headquartersByState() {
   return markers;
 }
 
-function toggleHeadquarters(state) {
-  const list = editing.preferred_headquarters;
-  editing.preferred_headquarters = list.includes(state) ? list.filter((s) => s !== state) : [...list, state];
-  changed();
-  refresh('headquarters');
-}
-
 function headquartersSection() {
-  if (!hqMap || hqMapData !== store.data) {
-    hqMap = new StateMap({ onToggle: toggleHeadquarters });
-    hqMapData = store.data;
-    hqMap.setMarkers(headquartersByState());
-  }
-  hqMap.showMarkers = showMarkers;
-  hqMap.setSelected(editing.preferred_headquarters);
   return section(t('company.headquarters'), t('company.headquarters_hint'),
-    hqMap.el,
-    h('label', { class: 'check' },
-      h('input', { type: 'checkbox', checked: showMarkers, onchange: (event) => {
-        showMarkers = hqMap.showMarkers = event.target.checked;
-        hqMap.draw();
-      } }),
-      t('company.show_headquarters')),
-    chipField('preferred_headquarters', 'states', t('company.headquarters_states'), null, 'headquarters'));
+    keyChips({ keys: editing.preferred_headquarters, kind: 'states', label: t('company.headquarters_states'),
+      // the map window marks where the other companies have their headquarters
+      map: { markers: headquartersByState(), markersLabel: t('company.show_headquarters') },
+      onChange: (keys) => { editing.preferred_headquarters = keys; changed(); refresh('headquarters'); } }));
 }
 
 // ------------------------------------------------------------- conditions

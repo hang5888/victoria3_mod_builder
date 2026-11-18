@@ -4,25 +4,32 @@
 //
 // A start keeps only what the mod changes (see backend/countries.py): definition fields that differ,
 // laws by group, and the other parts as a whole value, where null means "as the game has it".
+// A new country of the mod (mode "new") has its whole definition and a flag; on the page it stands on
+// an empty record of the game's (newGame), so the same code works for it.
 import { api } from './api.js';
 import { t } from './i18n.js';
 import { store, refreshState, loadData, language, languageName, nameOf, setProject, keptImages,
   countryStartName } from './store.js';
 import { renderSidebar, refreshSidebar, takePending } from './sidebar.js';
-import { h, fill, toast, confirmDialog, openPicker, debounce } from './ui.js';
+import { h, fill, toast, confirmDialog, debounce, openModal } from './ui.js';
 import { thumb } from './icons.js';
-import { run, section, field, sourceName, sourceBadges, keyChips, objectChip, scriptArea, pickerItems } from './widgets.js';
+import { run, section, field, sourceName, sourceBadges, keyChips, objectChip, scriptArea } from './widgets.js';
+import { chooseObjects } from './choose.js';
 import { bracesBalanced } from './script.js';
 import { CountryMap } from './map.js';
 import { groupOf, groupRows, rowLaw, rowName, lawLimit, groupLimits, limitBadge, defaultOf, projectGroups } from './law.js';
+import { territoryBuilders, partItems, territoryChanges, resetTerritoryMap } from './territory.js';
+import { relationBuilders, relationChanges, relationProblems } from './relations.js';
+import { flagEditor, flagCanvas, drawFlag, defaultFlag } from './flag.js';
 
 const ALL = '*';
 const DEFINITION_FIELDS = ['color', 'country_type', 'tier', 'cultures', 'capital', 'religion', 'social_hierarchy'];
 // parts kept whole: null leaves the game's
 const WHOLE_FIELDS = ['tech_tier', 'techs', 'tax_level', 'taxed_goods', 'tariffs', 'institutions', 'election',
   'ruling', 'extra', 'wealth', 'literacy', 'ruling_party'];
-const TABS = ['country', 'politics', 'technology', 'other'];
+const TABS = ['country', 'politics', 'technology', 'territory', 'pops', 'buildings', 'diplomacy', 'characters', 'other'];
 const DATE_PATTERN = /^\d{1,4}\.\d{1,2}\.\d{1,2}$/;
+const NEW_TAG = /^[A-Z][A-Z0-9]{2}$/;
 const PAGE = 200;
 
 let root = null;
@@ -34,7 +41,10 @@ let editingProject = null;
 let dirty = false;
 let tab = 'country';
 let worldMap = null;
-let capitalMap = null;    // the map of the capital, shared by the countries opened
+// What the server works out from the mod's starts with the one being edited: the provinces whose
+// owner changes {province: tag}, the countries left without land, and the parts of the edited country.
+let resolved = { owners: {}, vanished: [], parts: null };
+let resolving = 0;        // number of the latest request, so that only its answer counts
 let limit = PAGE;
 const filters = { query: '', type: '', tier: '', region: '', source: '', mine: false, existing: true };
 const expanded = new Set();  // law groups unfolded on the politics tab
@@ -45,10 +55,12 @@ window.addEventListener('beforeunload', (event) => {
   if (dirty) event.preventDefault();
 });
 
-function blankStart(key) {
+function blankStart(key, mode = key === ALL ? 'all' : 'override') {
   return {
-    key, mode: key === ALL ? 'all' : 'override', names: {}, adjs: {}, defs: {}, definition: {}, laws: {}, ig_names: {},
+    key, mode, flag: null, names: {}, adjs: {}, defs: {}, definition: {}, laws: {}, ig_names: {},
     ...Object.fromEntries(WHOLE_FIELDS.map((name) => [name, null])),
+    gains: [], releases: [], state_types: {}, homelands: {}, claims: { add: [], remove: [] }, pops: {}, buildings: {},
+    diplomacy: null, treaties_added: [], treaties_removed: [], characters: null,
   };
 }
 
@@ -57,8 +69,10 @@ async function loadCountries() {
   cdata = await api.get('/api/countries?lang=' + encodeURIComponent(language()));
   cdataFor = store.data;
   countries = new Map(cdata.countries.map((country) => [country.key, country]));
+  newGames.clear();
+  store.coa = cdata.coa;  // what flags are made of (see flag.js)
   worldMap = null;  // painted from the new data
-  capitalMap = null;
+  resetTerritoryMap();
 }
 
 export async function renderCountry(container) {
@@ -73,11 +87,12 @@ export async function renderCountry(container) {
   }
   setProject(await api.get('/api/project'));
   await loadCountries();
-  if (editingProject !== store.state.project.dir || (editing && editing.mode !== 'all' && !countries.has(editing.key))) {
+  if (editingProject !== store.state.project.dir || (editing && editing.mode !== 'all' && !gameOf(editing.key))) {
     editing = null;
     dirty = false;
     editingProject = store.state.project.dir;
   }
+  await resolve();
   els.sidebar = h('aside', { class: 'col col-sidebar' });
   els.builder = h('div', { class: 'builder' });
   root.replaceChildren(els.builder);
@@ -112,7 +127,33 @@ function renderPage() {
 const projectStarts = () => store.project.country_starts || [];
 const savedStart = (key) => projectStarts().find((start) => start.key === key) || null;
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const country = () => (editing && editing.mode !== 'all' ? countries.get(editing.key) : null);
+const newStarts = () => projectStarts().filter((start) => start.mode === 'new');
+
+// What the page knows of a new country "from the game": nothing (one record per tag, so it stays the same).
+const newGames = new Map();
+function newGame(key) {
+  if (!newGames.has(key)) {
+    newGames.set(key, {
+      key, name: '', adj: '', def: '', color: null, country_type: '', tier: '', cultures: [], capital: '', religion: '',
+      social_hierarchy: '', named_from_capital: false, source: 'mod', sources: [], file: '', isNew: true,
+      history: { law_steps: [], politics: [], tech_tier: 0, techs: [], tax_level: '', taxed_goods: [], tariffs: [],
+        institutions: [], election: '', ruling: [], ig_names: {}, extra: '', files: [] },
+      ig_name_texts: {}, wealth: '', literacy: '', ruling_party: '', characters: [], other_characters: 0,
+      stats: { states: 0, provinces: 0, population: 0, buildings: 0, characters: 0 },
+    });
+  }
+  return newGames.get(key);
+}
+
+// The game's record of a country, or the empty one of a new country (saved, or the one being made).
+function gameOf(key) {
+  if (countries.has(key)) return countries.get(key);
+  const start = editing && editing.key === key && editing.mode === 'new' ? editing : savedStart(key);
+  return start && start.mode === 'new' ? newGame(key) : null;
+}
+
+const country = () => (editing && editing.mode !== 'all' ? gameOf(editing.key) : null);
+const isNew = () => Boolean(editing && editing.mode === 'new');
 
 // The game's value of a part kept whole.
 function baseValue(name) {
@@ -143,11 +184,28 @@ function setDef(name, value) {
   changed();
 }
 
-function changed() {
+// After an edit; `territory`: the territory changed, so the server works out the parts again.
+function changed(territory = false) {
   dirty = true;
   renderPreview();
   refreshSidebar();
+  if (territory) resolveSoon();
 }
+
+// Ask the server what the mod's starts give, with the one being edited (none: the saved starts).
+async function resolve() {
+  const ticket = ++resolving;
+  const body = editing && editing.mode !== 'all' ? { start: editing } : {};
+  const result = await api.post('/api/country_start/resolve', body);
+  if (ticket !== resolving) return;
+  resolved = { owners: result.owners, vanished: result.vanished, parts: body.start ? result.parts : null };
+  if (editing) {
+    for (const name of ['territory', 'parts', 'pops', 'buildings', 'capital', 'diplomacy', 'treaties']) refresh(name);
+    renderPreview();
+  }
+}
+
+const resolveSoon = debounce(() => run(resolve), 150);
 
 function refresh(name) {
   if (!sections[name]) return;
@@ -258,19 +316,23 @@ function lawLimits(key) {
 
 async function open(key) {
   if (dirty && !(await confirmDialog(t('country.discard_confirm'), t('company.discard')))) return;
-  if (key !== ALL && !countries.has(key)) return;
+  if (key !== ALL && !gameOf(key)) return;
   const saved = savedStart(key);
   editing = { ...blankStart(key), ...structuredClone(saved || {}) };
+  if (editing.mode === 'new' && !editing.flag) editing.flag = defaultFlag(editing.definition.color);
   dirty = false;
   tab = key === ALL ? 'politics' : 'country';
+  resolved = { ...resolved, parts: null };
   renderPage();
   if (els.middle) els.middle.scrollTop = 0;
+  await resolve();
 }
 
 async function close() {
   if (dirty && !(await confirmDialog(t('country.discard_confirm'), t('company.discard')))) return;
   editing = null;
   dirty = false;
+  await resolve();
   renderPage();
 }
 
@@ -295,6 +357,7 @@ async function remove(start) {
     dirty = false;
     editing = null;
   }
+  await resolve();
   renderPage();
   toast(t('company.deleted'));
 }
@@ -308,30 +371,44 @@ const sidebarEditor = {
 
 // ------------------------------------------------------------------- world
 
-// Who owns each province as the game starts.
+// Who owns each province as the game starts, with the mod's changes.
 function provinceOwners() {
   const owners = new Map();
   for (const shares of Object.values(cdata.shares)) {
     for (const [tag, provinces] of shares) for (const hex of provinces) owners.set(hex, tag);
   }
+  for (const [hex, tag] of Object.entries(resolved.owners)) {
+    if (tag) owners.set(hex, tag);
+    else owners.delete(hex);
+  }
   return owners;
+}
+
+// Countries that own land at the start, with the mod's changes.
+function landed() {
+  const tags = new Set(Object.values(cdata.shares).flatMap((shares) => shares.map(([tag]) => tag)));
+  for (const tag of resolved.vanished) tags.delete(tag);
+  for (const tag of Object.values(resolved.owners)) if (tag) tags.add(tag);
+  return tags;
 }
 
 function colors() {
   const result = new Map();
   for (const game of cdata.countries) result.set(game.key, definitionOf(savedStart(game.key), game).color);
+  for (const start of newStarts()) result.set(start.key, start.definition.color || [128, 128, 128]);
+  if (editing && editing.mode !== 'all') result.set(editing.key, def('color'));
   return result;
 }
 
 function renderWorld() {
   if (!worldMap) worldMap = new CountryMap({ onPick: (tag) => run(() => open(tag)) });
   const painted = colors();
-  const signature = JSON.stringify([...painted]);
-  if (worldMap.signature !== signature) {  // painting takes a moment: only when a colour changed
+  const signature = JSON.stringify([[...painted], resolved.owners]);
+  if (worldMap.signature !== signature) {  // painting takes a moment: only when something changed
     worldMap.signature = signature;
     worldMap.setOwners(provinceOwners(), painted);
   }
-  const existing = cdata.countries.filter((game) => game.stats.states > 0).length;
+  const existing = cdata.countries.filter((game) => landed().has(game.key)).length;
   fill(els.world,
     h('div', { class: 'col-head' }, h('h2', {}, t('country.title')),
       h('span', { class: 'muted' }, t('country.count', { count: existing, total: cdata.countries.length }))),
@@ -354,7 +431,7 @@ function matches(game) {
   }
   if (filters.source && !game.sources.includes(filters.source)) return false;
   if (filters.mine && !start) return false;
-  if (filters.existing && game.stats.states === 0) return false;
+  if (filters.existing && !landed().has(game.key) && !game.isNew) return false;  // a new one shows until it has land
   return true;
 }
 
@@ -393,6 +470,10 @@ function renderList() {
       select('source', t('company.filter_source'), store.data.sources.filter((s) => sources.has(s.id))
         .map((s) => [s.id, sourceName(s.id)]))),
     h('div', { class: 'row' }, check('existing', t('country.only_existing')), check('mine', t('country.only_mine'))),
+    h('button', { class: 'country-row everyone', title: t('country.new_hint'), onclick: () => run(createCountry) },
+      h('span', { class: 'country-swatch all' }, '＋'),
+      h('span', { class: 'company-title' }, h('span', { class: 'company-name' }, t('country.new')),
+        h('span', { class: 'muted small' }, t('country.new_hint')))),
     h('button', { class: 'country-row everyone', onclick: () => run(() => open(ALL)) },
       h('span', { class: 'country-swatch all' }, '∗'),
       h('span', { class: 'company-title' },
@@ -405,21 +486,23 @@ function renderList() {
 }
 
 function renderRows() {
-  const shown = cdata.countries.filter(matches)
-    .sort((a, b) => displayName(a, savedStart(a.key)).localeCompare(displayName(b, savedStart(b.key))));
+  const alive = landed();
+  const made = newStarts().map((start) => newGame(start.key)).filter(matches);
+  const shown = [...made, ...cdata.countries.filter(matches)
+    .sort((a, b) => displayName(a, savedStart(a.key)).localeCompare(displayName(b, savedStart(b.key))))];
   fill(els.rows,
     shown.length === 0 && h('p', { class: 'muted small' }, t('country.no_match')),
     shown.slice(0, limit).map((game) => {
       const start = savedStart(game.key);
       const definition = definitionOf(start, game);
       return h('button', { class: 'country-row', title: game.key, onclick: () => run(() => open(game.key)) },
-        swatch(definition.color),
+        game.isNew && start.flag ? flagCanvas(start.flag, 30, 'country-row-flag') : swatch(definition.color),
         h('span', { class: 'company-title' },
           h('span', { class: 'company-name' }, displayName(game, start)),
           h('span', { class: 'company-key' }, `${game.key} · ${levelName('tiers', definition.tier)}`)),
         h('span', { class: 'side-badges' },
-          start && h('span', { class: 'badge accent' }, t('country.modified')),
-          game.stats.states === 0 && h('span', { class: 'badge faded', title: t('country.not_existing_hint') },
+          start && h('span', { class: 'badge accent' }, game.isNew ? t('country.new_badge') : t('country.modified')),
+          !alive.has(game.key) && h('span', { class: 'badge faded', title: t('country.not_existing_hint') },
             t('country.not_existing')),
           sourceBadges(game)));
     }),
@@ -431,6 +514,7 @@ function renderRows() {
 
 function renderLeft() {
   els.preview = h('div', { class: 'preview' });
+  els.flag = null;
   fill(els.left,
     h('div', { class: 'col-head' },
       h('h2', {}, t('company.editing')),
@@ -442,11 +526,13 @@ function renderLeft() {
 // What the start changes, part by part.
 function changes(start) {
   const parts = [];
-  if (['names', 'adjs', 'defs'].some((name) => Object.keys(start[name] || {}).length)) parts.push('names');
-  parts.push(...DEFINITION_FIELDS.filter((name) => name in start.definition));
+  if (start.mode === 'new') parts.push('new');  // the whole definition, the names and the flag are its own
+  else if (['names', 'adjs', 'defs'].some((name) => Object.keys(start[name] || {}).length)) parts.push('names');
+  if (start.mode !== 'new') parts.push(...DEFINITION_FIELDS.filter((name) => name in start.definition));
   if (Object.keys(start.laws).length) parts.push('laws');
   if (Object.keys(start.ig_names).length) parts.push('ig_names');
   parts.push(...WHOLE_FIELDS.filter((name) => start[name] !== null && start[name] !== undefined));
+  if (start.mode !== 'all') parts.push(...territoryChanges(start), ...relationChanges(start));
   return parts;
 }
 
@@ -455,7 +541,15 @@ function problems(start) {
   if (start.mode === 'all') return found;
   if (start.election && !DATE_PATTERN.test(start.election)) found.push('election');
   if (start.definition.cultures && !start.definition.cultures.length) found.push('cultures');
+  if (start.mode === 'new') {
+    if (!Object.values(start.names).some(Boolean)) found.push('name_missing');
+    for (const name of ['country_type', 'tier', 'cultures']) {
+      if (!(start.definition[name] && start.definition[name].length) && !found.includes(name)) found.push(name);
+    }
+    if (!start.definition.capital) found.push('capital_missing');
+  }
   if (start.extra !== null && !bracesBalanced(start.extra)) found.push('braces:extra');
+  found.push(...relationProblems(start));
   return found;
 }
 
@@ -465,6 +559,7 @@ function problemText(code) {
 }
 
 function ownedStates(tag) {
+  if (editing && editing.key === tag && resolved.parts) return resolved.parts.map((part) => part.state);
   return Object.entries(cdata.shares).filter(([, shares]) => shares.some(([owner]) => owner === tag))
     .map(([state]) => state);
 }
@@ -478,7 +573,9 @@ function notes(start) {
     return found;
   }
   const game = country();
-  if (game.stats.states === 0) found.push(t('country.not_existing_hint'));
+  const others = resolved.vanished.filter((tag) => tag !== game.key);
+  if (others.length) found.push(t('territory.note_vanished', { names: others.map((tag) => nameOf('countries', tag)).join(' / ') }));
+  if (!landed().has(game.key)) found.push(game.isNew ? t('country.new_needs_land') : t('country.not_existing_hint'));
   else if (!ownedStates(game.key).includes(def('capital'))) found.push(t('country.note_capital'));
   if (game.named_from_capital && Object.keys(start.names).length) found.push(t('country.note_named_from_capital'));
   return found;
@@ -516,14 +613,23 @@ function renderPreview() {
   const ruling = current('ruling');
   const tier = current('tech_tier');
   const filled = store.state.languages.filter((l) => start.names[l.key]);
+  // what it has: from the parts the server worked out (with the mod's own lists), else the game's
+  const stats = resolved.parts ? {
+    states: resolved.parts.length,
+    population: resolved.parts.reduce((sum, part) => sum + partItems(start, part, 'pops').reduce((n, p) => n + p.size, 0), 0),
+    buildings: resolved.parts.reduce((sum, part) => sum + partItems(start, part, 'buildings').length, 0),
+  } : game.stats;
+  if (game.isNew && els.flag && start.flag) drawFlag(els.flag, start.flag);  // only the flag: quicker than the rest
+  else if (game.isNew && start.flag) els.flag = flagCanvas(start.flag, 288, 'country-flag');
   fill(els.preview,
-    h('div', { class: 'country-flag', style: `background:${rgb(definition.color)}`, title: t('country.flag_hint') }),
-    h('h3', { class: 'preview-name' }, start.names[lang] || game.name),
+    game.isNew && start.flag ? els.flag
+      : h('div', { class: 'country-flag', style: `background:${rgb(definition.color)}`, title: t('country.flag_hint') }),
+    h('h3', { class: 'preview-name' }, start.names[lang] || Object.values(start.names).find(Boolean) || game.name || game.key),
     (start.defs[lang] || game.def) && h('p', { class: 'muted small' }, start.defs[lang] || game.def),
     h('div', { class: 'preview-meta' },
       h('span', { class: 'company-key' }, game.key),
-      h('span', { class: 'badge' + (savedStart(game.key) ? ' accent' : '') },
-        savedStart(game.key) ? t('country.modified') : t('country.game')),
+      h('span', { class: 'badge' + (savedStart(game.key) || game.isNew ? ' accent' : '') },
+        game.isNew ? t('country.new_badge') : savedStart(game.key) ? t('country.modified') : t('country.game')),
       dirty && h('span', { class: 'badge warn' }, t('company.unsaved'))),
     h('div', { class: 'muted' }, [levelName('country_types', definition.country_type), levelName('tiers', definition.tier)]
       .join(' · ')),
@@ -534,10 +640,10 @@ function renderPreview() {
       h('h4', {}, t('country.part.cultures')),
       h('div', { class: 'chips' }, definition.cultures.map((key) => objectChip('cultures', key)))),
     h('div', { class: 'stats country-stats' },
-      stat(t('country.stat.states'), String(game.stats.states)),
-      stat(t('country.stat.population'), game.stats.population.toLocaleString()),
-      stat(t('country.stat.buildings'), String(game.stats.buildings)),
-      stat(t('country.stat.characters'), String(game.stats.characters))),
+      stat(t('country.stat.states'), String(stats.states)),
+      stat(t('country.stat.population'), stats.population.toLocaleString()),
+      stat(t('country.stat.buildings'), String(stats.buildings)),
+      stat(t('country.stat.characters'), String((start.characters || game.characters).length))),
     h('div', { class: 'preview-group' },
       h('h4', {}, t('country.part.tech_tier')),
       h('div', {}, tier ? t('country.tier_n', { n: tier }) : t('country.tier_none'))),
@@ -568,7 +674,9 @@ function igName(ig) {
 function renderMiddle() {
   for (const name of Object.keys(sections)) delete sections[name];
   const tabs = editing.mode === 'all' ? ['politics'] : TABS;
-  for (const name of TAB_SECTIONS[editing.mode === 'all' ? 'all' : tab]) sections[name] = builders[name]();
+  const shown = editing.mode === 'all' ? TAB_SECTIONS.all
+    : tab === 'country' && isNew() ? ['code', ...TAB_SECTIONS.country, 'flag'] : TAB_SECTIONS[tab];
+  for (const name of shown) sections[name] = builders[name]();
   fill(els.middle,
     h('div', { class: 'editor-bar' },
       h('div', { class: 'tabs' }, tabs.map((name) => h('button', {
@@ -589,6 +697,7 @@ function resetWhole(name, sectionName) {
 }
 
 function resetDef(name, sectionName = 'definition') {
+  if (isNew()) return null;  // a new country has nothing to go back to
   return resetButton(name in editing.definition, () => {
     delete editing.definition[name];
     changed();
@@ -623,10 +732,12 @@ function namesSection() {
       changed();
     },
   });
-  return section(t('country.names'), t('country.names_hint'),
-    field(t('country.name', { language: languageName(lang) }), input('names', game.name), t('country.name_hint')),
-    field(t('country.adj', { language: languageName(lang) }), input('adjs', game.adj)),
-    field(t('country.def', { language: languageName(lang) }), input('defs', game.def)),
+  const other = (name) => Object.values(editing[name]).find(Boolean) || '';  // a new country's, in another language
+  return section(t('country.names'), game.isNew ? t('country.names_new_hint') : t('country.names_hint'),
+    field(t('country.name', { language: languageName(lang) }), input('names', game.name || other('names')),
+      game.isNew ? null : t('country.name_hint')),
+    field(t('country.adj', { language: languageName(lang) }), input('adjs', game.adj || other('adjs'))),
+    field(t('country.def', { language: languageName(lang) }), input('defs', game.def || other('defs'))),
     game.named_from_capital && h('p', { class: 'muted small' }, t('country.note_named_from_capital')));
 }
 
@@ -635,7 +746,8 @@ function definitionSection() {
   const color = h('input', { class: 'country-color', type: 'color', value: hex(def('color')),
     onchange: () => { setDef('color', fromHex(color.value)); refresh('definition'); refresh('capital'); } });
   const religionOf = cdata.culture_religions[def('cultures')[0]];
-  return section(t('country.definition'), t('country.definition_hint', { source: sourceName(game.source) }),
+  return section(t('country.definition'), game.isNew ? t('country.definition_new_hint')
+    : t('country.definition_hint', { source: sourceName(game.source) }),
     h('div', { class: 'country-grid' },
       field(labelled(t('country.part.color'), resetDef('color')), h('div', { class: 'row' }, color, swatch(def('color')))),
       field(labelled(t('country.part.country_type'), resetDef('country_type')),
@@ -657,7 +769,111 @@ function definitionSection() {
       resetDef('cultures')));
 }
 
-// The capital, chosen on a map of the country (the other countries dimmed) or from a list.
+// A new country: its tag, and its flag.
+function codeSection() {
+  return section(t('country.code'), t('country.code_hint'),
+    h('div', { class: 'row' }, h('b', { class: 'country-code' }, editing.key)));
+}
+
+function flagSection() {
+  return section(t('country.flag'), t('country.flag_new_hint'),
+    flagEditor({ get: () => editing.flag, set: (flag) => { editing.flag = flag; changed(); }, redraw: () => refresh('flag') }));
+}
+
+// ------------------------------------------------------------ new country
+
+// A random colour that is not too dark or too pale.
+function randomColor() {
+  const hue = Math.random() * 6;
+  const f = hue % 1;
+  const [a, b, c] = [200, Math.round(200 * (1 - f)) + 40, Math.round(200 * f) + 40];
+  return [[a, c, 40], [b, a, 40], [40, a, c], [40, b, a], [c, 40, a], [a, 40, b]][Math.floor(hue)];
+}
+
+// What a new country takes from a country of the game: its definition (not the capital: its land is not
+// copied), politics, technology, wealth and literacy, as they are with the mod's changes.
+function copiedStart(code, sourceKey) {
+  const game = countries.get(sourceKey);
+  const saved = savedStart(sourceKey);
+  const start = blankStart(code, 'new');
+  const definition = definitionOf(saved, game);
+  start.definition = { ...definition, capital: '', color: randomColor() };
+  const fromHistory = historyLaws(game, definition);
+  for (const group of Object.keys(fromHistory)) start.laws[group] = fromHistory[group].law;
+  Object.assign(start.laws, (saved && saved.laws) || {});
+  for (const name of ['tech_tier', 'techs', 'tax_level', 'taxed_goods', 'tariffs', 'institutions', 'ruling', 'wealth',
+    'literacy']) {
+    const own = saved && saved[name] !== null && saved[name] !== undefined ? saved[name] : null;
+    const value = own !== null ? own : ['wealth', 'literacy'].includes(name) ? game[name] : game.history[name];
+    if (value && (!Array.isArray(value) || value.length)) start[name] = structuredClone(value);
+  }
+  return start;
+}
+
+async function createCountry() {
+  if (dirty && !(await confirmDialog(t('country.discard_confirm'), t('company.discard')))) return;
+  let source = '';
+  const code = h('input', { class: 'input mono', type: 'text', maxLength: 3, placeholder: 'ABC',
+    oninput: () => { code.value = code.value.toUpperCase(); check(); } });
+  const message = h('p', { class: 'muted small' }, t('country.code_hint'));
+  const sourceButton = h('button', { class: 'btn', onclick: () => chooseObjects({
+    kind: 'countries', title: t('country.new_copy'), multi: false,
+    onDone: ([key]) => {
+      if (!key) return;
+      source = key;
+      sourceButton.textContent = `${nameOf('countries', key)} (${key})`;
+      copy.checked = true;
+    },
+  }) }, t('common.choose'));
+  const copy = h('input', { type: 'radio', name: 'new-country-mode', checked: true });
+  const blank = h('input', { type: 'radio', name: 'new-country-mode' });
+  const ok = h('button', { class: 'btn primary', disabled: true, onclick: () => {
+    if (copy.checked && !source) {
+      message.textContent = t('country.new_pick_source');
+      message.className = 'notice warn';
+      return;
+    }
+    close();
+    run(() => startNew(code.value, copy.checked ? source : ''));
+  } }, t('country.new_create'));
+  function check() {
+    const value = code.value;
+    const taken = countries.has(value) || projectStarts().some((start) => start.key === value);
+    const valid = NEW_TAG.test(value) && !taken;
+    code.classList.toggle('invalid', Boolean(value) && !valid);
+    ok.disabled = !valid;
+    message.textContent = taken ? t('country.code_taken') : t('country.code_hint');
+    message.className = taken ? 'notice warn' : 'muted small';
+  }
+  const close = openModal(h('div', { class: 'modal modal-small' },
+    h('h3', {}, t('country.new')),
+    field(t('country.code'), code),
+    message,
+    h('label', { class: 'check' }, copy, t('country.new_copy')), h('div', { class: 'row' }, sourceButton),
+    h('p', { class: 'muted small' }, t('country.new_copy_hint')),
+    h('label', { class: 'check' }, blank, t('country.new_blank')),
+    h('p', { class: 'muted small' }, t('country.new_blank_hint')),
+    h('div', { class: 'modal-footer' }, h('button', { class: 'btn', onclick: () => close() }, t('common.cancel')), ok)));
+  code.focus();
+}
+
+async function startNew(code, sourceKey) {
+  const start = sourceKey ? copiedStart(code, sourceKey) : blankStart(code, 'new');
+  if (!sourceKey) {
+    start.definition = { color: randomColor(), country_type: 'recognized', tier: 'principality', cultures: [],
+      capital: '', religion: '', social_hierarchy: '' };
+  }
+  start.flag = defaultFlag(start.definition.color);
+  editing = start;
+  dirty = true;
+  tab = 'country';
+  resolved = { ...resolved, parts: null };
+  renderPage();
+  await resolve();
+}
+
+// The capital, chosen in the map window: the map of the country (the other countries dimmed), and the
+// country's own states listed first.
 function capitalSection() {
   const game = country();
   const capital = def('capital');
@@ -667,17 +883,12 @@ function capitalSection() {
     setDef('capital', key);
     refresh('capital');
   };
-  if (!capitalMap) capitalMap = new CountryMap({ onState: choose });
-  capitalMap.onState = choose;
-  const painted = colors();
-  painted.set(game.key, def('color'));
-  capitalMap.setOwners(provinceOwners(), painted, { tag: game.key, state: capital });
-  const list = () => {
-    const mine = new Set(owned);
-    const items = pickerItems('states').map((item) => (mine.has(item.key)
-      ? { ...item, sub: `${t('country.capital_owned')} · ${item.sub}` } : item))
-      .sort((a, b) => Number(mine.has(b.key)) - Number(mine.has(a.key)));
-    openPicker({ title: t('country.part.capital'), multi: false, selected: [capital], items,
+  const pick = () => {
+    const painted = colors();
+    painted.set(game.key, def('color'));
+    chooseObjects({ kind: 'states', title: t('country.part.capital'), multi: false, selected: [capital],
+      map: { country: { owners: provinceOwners(), colors: painted, focus: ([key]) => ({ tag: game.key, state: key }) },
+        first: { keys: new Set(owned), label: t('country.capital_owned') } },
       onDone: ([key]) => choose(key) });
   };
   return section(t('country.part.capital'), t('country.capital_hint'),
@@ -688,8 +899,7 @@ function capitalSection() {
         t('country.capital_not_owned')),
       h('span', { class: 'grow' }),
       resetDef('capital', 'capital'),
-      h('button', { class: 'btn', onclick: list }, t('country.capital_list'))),
-    capitalMap.el);
+      h('button', { class: 'btn', onclick: pick }, t('country.capital_choose'))));
 }
 
 // ----------------------------------------------------------- politics tab
@@ -888,8 +1098,8 @@ function tariffSection() {
       setValue('tariffs', tariffs.filter((_r, j) => j !== i));
       refresh('tariffs');
     } }, '✕')));
-  const add = () => openPicker({
-    title: t('country.part.tariffs'), multi: false, items: pickerItems('goods'),
+  const add = () => chooseObjects({
+    kind: 'goods', title: t('country.part.tariffs'), multi: false,
     onDone: ([goods]) => {
       if (!goods) return;
       setValue('tariffs', [...tariffs, { kind: 'import', goods, level: 'high_tariffs' }]);
@@ -976,6 +1186,17 @@ function otherSection() {
 }
 
 const builders = {
+  ...territoryBuilders({
+    start: () => editing, game: () => country(), get cdata() { return cdata; }, parts: () => resolved.parts, owners: provinceOwners,
+    colors, capital: () => def('capital'), changed, refresh,
+  }),
+  ...relationBuilders({
+    start: () => editing, game: () => country(), get cdata() { return cdata; }, vanished: () => resolved.vanished,
+    others: () => projectStarts().filter((start) => start.mode !== 'all' && start.key !== editing.key),
+    cultures: () => def('cultures'), changed, refresh,
+  }),
+  code: codeSection,
+  flag: flagSection,
   names: namesSection,
   definition: definitionSection,
   capital: capitalSection,
@@ -994,6 +1215,11 @@ const TAB_SECTIONS = {
   country: ['names', 'definition', 'capital'],
   politics: ['laws', 'igs', 'government', 'taxes', 'tariffs', 'institutions'],
   technology: ['technology', 'population'],
+  territory: ['territory', 'parts', 'claims'],
+  pops: ['pops'],
+  buildings: ['buildings'],
+  diplomacy: ['diplomacy', 'treaties'],
+  characters: ['characters'],
   other: ['other'],
   all: ['laws'],
 };

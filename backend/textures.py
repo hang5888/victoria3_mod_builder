@@ -1,7 +1,8 @@
 """Converting the game's textures to images a browser can show.
 
-Supports uncompressed, DXT1/DXT3/DXT5 and BC7 .dds files, which covers the
-base game and the mods seen so far. PNG and JPEG files (some mods use them)
+Supports uncompressed, DXT1/DXT3/DXT5 and BC7 .dds files and true-colour .tga
+files (some coat of arms patterns), which covers the base game and the mods seen
+so far. PNG and JPEG files (some mods use them)
 are passed through.
 """
 import struct
@@ -12,8 +13,11 @@ class UnsupportedTexture(Exception):
     pass
 
 
-def to_browser_image(data, max_size):
-    """Returns (image bytes, content type) for a texture file's contents."""
+def to_browser_image(data, max_size, name=""):
+    """Returns (image bytes, content type) for a texture file's contents (`name`: its file name, for
+    TGA files, which have no signature)."""
+    if name.lower().endswith(".tga"):
+        return tga_to_png(data, max_size), "image/png"
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return data, "image/png"
     if data[:3] == b"\xff\xd8\xff":
@@ -314,3 +318,142 @@ def dds_to_png(data, max_size):
             row[3::4] = line[a::bpp * step] if a is not None else b"\xff" * out_w
             rows.append(row)
     return _png(out_w, len(rows), rows)
+
+
+# ---------------------------------------------------------------------- TGA
+
+def tga_to_png(data, max_size):
+    """PNG bytes for an uncompressed or run-length TGA (true colour), scaled down like dds_to_png."""
+    if len(data) < 18:
+        raise UnsupportedTexture("not a TGA file")
+    id_length, color_map, kind = data[0], data[1], data[2]
+    width, height = struct.unpack_from("<HH", data, 12)
+    bits, descriptor = data[16], data[17]
+    if color_map or kind not in (2, 10) or bits not in (24, 32) or not width or not height:
+        raise UnsupportedTexture("unsupported TGA")
+    bpp = bits // 8
+    pos = 18 + id_length
+    if kind == 2:
+        pixels = data[pos:pos + width * height * bpp]
+    else:
+        out = bytearray()
+        while len(out) < width * height * bpp and pos < len(data):
+            head = data[pos]
+            count = (head & 0x7F) + 1
+            if head & 0x80:
+                out += data[pos + 1:pos + 1 + bpp] * count
+                pos += 1 + bpp
+            else:
+                out += data[pos + 1:pos + 1 + count * bpp]
+                pos += 1 + count * bpp
+        pixels = bytes(out)
+    if len(pixels) < width * height * bpp:
+        raise UnsupportedTexture("truncated TGA")
+    top_down = bool(descriptor & 0x20)
+    step = max(1, -(-max(width, height) // max_size))
+    out_w = len(range(0, width, step))
+    rows = []
+    for y in range(0, height, step):
+        source = y if top_down else height - 1 - y
+        line = pixels[source * width * bpp:(source + 1) * width * bpp]
+        row = bytearray(out_w * 4)
+        row[0::4] = line[2::bpp * step]
+        row[1::4] = line[1::bpp * step]
+        row[2::4] = line[0::bpp * step]
+        row[3::4] = line[3::bpp * step] if bpp == 4 else b"\xff" * out_w
+        rows.append(row)
+    return _png(out_w, len(rows), rows)
+
+
+# ------------------------------------------------------- PNG in, DDS out
+
+def png_pixels(data):
+    """(width, height, RGBA bytes) of an 8-bit RGBA or RGB PNG (as a browser canvas makes)."""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise UnsupportedTexture("not a PNG file")
+    pos, idat, header = 8, [], None
+    while pos + 8 <= len(data):
+        length, kind = struct.unpack_from(">I4s", data, pos)
+        body = data[pos + 8:pos + 8 + length]
+        if kind == b"IHDR":
+            header = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat.append(body)
+        elif kind == b"IEND":
+            break
+        pos += 12 + length
+    if not header:
+        raise UnsupportedTexture("no PNG header")
+    width, height, depth, color, _compression, _filter, interlace = header
+    if depth != 8 or color not in (2, 6) or interlace:
+        raise UnsupportedTexture("unsupported PNG")
+    bpp = 4 if color == 6 else 3
+    raw = zlib.decompress(b"".join(idat))
+    stride = width * bpp
+    out = bytearray(width * height * 4)
+    prev = bytearray(stride)
+    for y in range(height):
+        start = y * (stride + 1)
+        kind = raw[start]
+        line = bytearray(raw[start + 1:start + 1 + stride])
+        if kind == 1:
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 255
+        elif kind == 2:
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 255
+        elif kind == 3:
+            for i in range(stride):
+                left = line[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + ((left + prev[i]) >> 1)) & 255
+        elif kind == 4:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        prev = line
+        target = y * width * 4
+        if bpp == 4:
+            out[target:target + width * 4] = line
+        else:
+            row = bytearray(width * 4)
+            row[0::4], row[1::4], row[2::4] = line[0::3], line[1::3], line[2::3]
+            row[3::4] = b"\xff" * width
+            out[target:target + width * 4] = row
+    return width, height, bytes(out)
+
+
+def _half(width, height, pixels):
+    """The next mip level: each 2×2 block averaged."""
+    w, h = max(1, width // 2), max(1, height // 2)
+    out = bytearray(w * h * 4)
+    for y in range(h):
+        y0, y1 = min(2 * y, height - 1) * width * 4, min(2 * y + 1, height - 1) * width * 4
+        for x in range(w):
+            x0, x1 = min(2 * x, width - 1) * 4, min(2 * x + 1, width - 1) * 4
+            for c in range(4):
+                out[(y * w + x) * 4 + c] = (pixels[y0 + x0 + c] + pixels[y0 + x1 + c]
+                                            + pixels[y1 + x0 + c] + pixels[y1 + x1 + c] + 2) >> 2
+    return w, h, bytes(out)
+
+
+def rgba_to_dds(width, height, pixels):
+    """An uncompressed 32-bit DDS (BGRA) with every mip level, from RGBA bytes."""
+    levels = []
+    w, h, level = width, height, pixels
+    while True:
+        bgra = bytearray(level)
+        bgra[0::4], bgra[2::4] = level[2::4], level[0::4]
+        levels.append(bytes(bgra))
+        if w == 1 and h == 1:
+            break
+        w, h, level = _half(w, h, level)
+    flags = 0x1 | 0x2 | 0x4 | 0x8 | 0x1000 | 0x20000  # caps, height, width, pitch, pixel format, mip count
+    header = struct.pack("<4sIIIIIII44x", b"DDS ", 124, flags, height, width, width * 4, 0, len(levels))
+    pixel_format = struct.pack("<II4sIIIII", 32, 0x41, b"\0\0\0\0", 32,
+                               0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000)
+    caps = struct.pack("<IIII4x", 0x1000 | 0x8 | 0x400000, 0, 0, 0)
+    return header + pixel_format + caps + b"".join(levels)

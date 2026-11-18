@@ -42,7 +42,7 @@ export function debounce(fn, ms) {
   };
 }
 
-function openModal(content, onClose) {
+export function openModal(content, onClose) {
   const backdrop = h('div', { class: 'modal-backdrop' }, content);
   const close = () => {
     backdrop.remove();
@@ -95,6 +95,26 @@ export function imageDialog({ title, src, lines = [], confirmLabel, wide = false
 
 const PAGE = 200;
 
+// The closed sections of a picker, kept in the browser (nothing is kept when storage is not available).
+function readClosed(name) {
+  if (!name) return [];
+  try {
+    const value = JSON.parse(localStorage.getItem('vmb.picker.' + name) || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeClosed(name, closed) {
+  if (!name) return;
+  try {
+    localStorage.setItem('vmb.picker.' + name, JSON.stringify([...closed]));
+  } catch {
+    // not kept
+  }
+}
+
 // A searchable list to choose from.
 //   items:    [{key, name, sub}]  (sub: small secondary text)
 //   selected: keys chosen so far; multi: allow several
@@ -102,16 +122,27 @@ const PAGE = 200;
 //   icon:     optional function item -> small image URL beside the name ('' for none)
 //   roomy:    wider dialog and items, with the secondary text on several lines
 //   toggle:   optional {label, test(item), on} extra filter checkbox
+//   filters:  optional [{label, options: [[value, text]], test(item, value)}] drop-down filters ('' shows all)
+//   tabs:     optional [{key, label, test(item)}]: the items of one tab are shown at a time
+//   groups:   optional {of(item) -> group key, label(key), order: [keys], remember: name}: the items in
+//             sections under bars that open and close (remembered in the browser under `remember`)
 //   onDone:   called with the chosen keys
+// The chosen items stay in the list whatever the toggle and filters say; search and tabs apply to all.
 export function openPicker({ title, items, selected = [], multi = true, thumb = null, icon = null, wide = false,
-  roomy = false, toggle = null, onDone }) {
+  roomy = false, toggle = null, filters = [], tabs = null, groups = null, onDone }) {
   const chosen = new Set(selected);
   let query = '';
   let limit = PAGE;
   let filterOn = toggle ? toggle.on : false;
+  const filterValues = filters.map(() => '');
+  const visibleTabs = tabs ? tabs.filter((tab) => items.some((item) => tab.test(item))) : [];
+  let tab = visibleTabs.length ? (visibleTabs.find((one) => items.some((item) => chosen.has(item.key) && one.test(item)))
+    || visibleTabs[0]).key : null;
+  const closed = new Set(groups ? readClosed(groups.remember) : []);
   for (const item of items) {
     if (!item.search) item.search = `${item.name} ${item.key} ${item.sub || ''}`.toLowerCase();
   }
+  const tabBar = visibleTabs.length > 1 ? h('div', { class: 'tabs picker-tabs' }) : null;
 
   const list = h('div', { class: 'picker-list' + (thumb ? ' picker-grid' : '') + (wide ? ' picker-wide' : '')
     + (roomy ? ' picker-roomy' : '') });
@@ -133,38 +164,80 @@ export function openPicker({ title, items, selected = [], multi = true, thumb = 
     else chosen.add(item.key);
     row.classList.toggle('selected', chosen.has(item.key));
     updateFooter();
+    if (groups) renderList();  // the bars count the chosen items
   }
 
   function updateFooter() {
     doneButton.textContent = t('picker.done', { count: chosen.size });
   }
 
+  function itemButton(item) {
+    const row = h('button', {
+      class: 'picker-item' + (chosen.has(item.key) ? ' selected' : ''),
+      title: item.key,
+      onclick: () => pick(item, row),
+    },
+      thumb && h('img', { loading: 'lazy', src: thumb(item), alt: '',
+        onerror: (event) => event.target.classList.add('broken') }),
+      icon && (icon(item)
+        ? h('img', { class: 'picker-icon', loading: 'lazy', src: icon(item), alt: '',
+          onerror: (event) => event.target.classList.add('broken') })
+        : h('span', { class: 'picker-icon' })),
+      h('span', { class: 'picker-text' },
+        h('span', { class: 'picker-name' }, item.name),
+        item.sub && h('span', { class: 'picker-sub' }, item.sub)));
+    return row;
+  }
+
+  // the items in sections: a bar per group (with how many items and how many are chosen), then its items
+  function groupRows(matches, searching) {
+    const byGroup = new Map();
+    for (const item of matches) {
+      const key = groups.of(item);
+      if (!byGroup.has(key)) byGroup.set(key, []);
+      byGroup.get(key).push(item);
+    }
+    const order = [...groups.order.filter((key) => byGroup.has(key)), ...[...byGroup.keys()].filter((key) => !groups.order.includes(key))];
+    return order.flatMap((key) => {
+      const members = byGroup.get(key);
+      const open = searching || !closed.has(key);
+      const picked = members.filter((item) => chosen.has(item.key)).length;
+      const bar = h('button', {
+        class: 'picker-group' + (open ? ' open' : ''),
+        onclick: () => {
+          if (closed.has(key)) closed.delete(key);
+          else closed.add(key);
+          writeClosed(groups.remember, closed);
+          renderList();
+        },
+      }, h('span', { class: 'picker-group-arrow' }, open ? '▾' : '▸'), h('b', {}, groups.label(key)),
+      h('span', { class: 'muted' }, t('picker.group_count', { count: members.length })),
+      picked > 0 && h('span', { class: 'badge accent' }, t('picker.group_chosen', { count: picked })));
+      return [bar, ...(open ? members.map(itemButton) : [])];
+    });
+  }
+
   function renderList() {
     const q = query.trim().toLowerCase();
-    const matches = items.filter((item) =>
-      (!q || item.search.includes(q)) && (!filterOn || chosen.has(item.key) || toggle.test(item)));
-    list.replaceChildren(...matches.slice(0, limit).map((item) => {
-      const row = h('button', {
-        class: 'picker-item' + (chosen.has(item.key) ? ' selected' : ''),
-        title: item.key,
-        onclick: () => pick(item, row),
-      },
-        thumb && h('img', { loading: 'lazy', src: thumb(item), alt: '',
-          onerror: (event) => event.target.classList.add('broken') }),
-        icon && (icon(item)
-          ? h('img', { class: 'picker-icon', loading: 'lazy', src: icon(item), alt: '',
-            onerror: (event) => event.target.classList.add('broken') })
-          : h('span', { class: 'picker-icon' })),
-        h('span', { class: 'picker-text' },
-          h('span', { class: 'picker-name' }, item.name),
-          item.sub && h('span', { class: 'picker-sub' }, item.sub)));
-      return row;
-    }));
-    if (matches.length > limit) {
-      list.append(h('button', { class: 'btn picker-more', onclick: () => { limit += PAGE; renderList(); } },
-        t('common.show_more', { count: matches.length - limit })));
+    const matches = items.filter((item) => (!q || item.search.includes(q)) && (chosen.has(item.key)
+      || ((!filterOn || toggle.test(item)) && filters.every((filter, i) => !filterValues[i] || filter.test(item, filterValues[i])))));
+    if (tabBar) {
+      tabBar.replaceChildren(...visibleTabs.map((one) => h('button', {
+        class: 'tab' + (one.key === tab ? ' active' : ''), onclick: () => { tab = one.key; limit = PAGE; renderList(); },
+      }, one.label, q && ` (${matches.filter((item) => one.test(item)).length})`)));
     }
-    status.textContent = t('picker.count', { count: matches.length });
+    const current = visibleTabs.find((one) => one.key === tab);
+    const shown = current ? matches.filter((item) => current.test(item)) : matches;
+    if (groups) {
+      list.replaceChildren(...groupRows(shown, Boolean(q)));
+    } else {
+      list.replaceChildren(...shown.slice(0, limit).map(itemButton));
+      if (shown.length > limit) {
+        list.append(h('button', { class: 'btn picker-more', onclick: () => { limit += PAGE; renderList(); } },
+          t('common.show_more', { count: shown.length - limit })));
+      }
+    }
+    status.textContent = t('picker.count', { count: shown.length });
   }
 
   const search = h('input', {
@@ -177,11 +250,20 @@ export function openPicker({ title, items, selected = [], multi = true, thumb = 
       h('button', { class: 'btn icon-btn', title: t('common.close'), onclick: () => close() }, '✕')),
     h('div', { class: 'picker-tools' },
       search,
+      filters.map((filter, i) => {
+        const select = h('select', {
+          class: 'input picker-filter', title: filter.label,
+          onchange: () => { filterValues[i] = select.value; limit = PAGE; renderList(); },
+        }, h('option', { value: '' }, `${filter.label}: ${t('picker.all')}`),
+        filter.options.map(([value, text]) => h('option', { value }, text)));
+        return select;
+      }),
       toggle && h('label', { class: 'check' },
         h('input', { type: 'checkbox', checked: filterOn,
           onchange: (event) => { filterOn = event.target.checked; limit = PAGE; renderList(); } }),
         toggle.label),
       status),
+    tabBar,
     list,
     multi && h('div', { class: 'modal-footer' },
       h('button', { class: 'btn', onclick: () => close() }, t('common.cancel')), doneButton));

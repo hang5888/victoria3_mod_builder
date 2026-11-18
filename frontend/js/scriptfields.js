@@ -24,8 +24,8 @@
 // `hint`: there is a hint text. `risky(value)`: there is a warning, shown in yellow above the
 // field at all times, and marked while risky(value) is true.
 import { t } from './i18n.js';
-import { h, openPicker } from './ui.js';
-import { pickerIcon } from './icons.js';
+import { h } from './ui.js';
+import { chooseObjects } from './choose.js';
 import { parseScript, isBlock, dedent, blockText, scriptValue, setScriptValue } from './script.js';
 import { conditionEditor, valueButton } from './conditions.js';
 import { objectChip, pickerItems, scriptArea } from './widgets.js';
@@ -115,8 +115,8 @@ function chips(kind, title, keys, onChange) {
   return h('div', { class: 'chips' },
     keys.map((key) => objectChip(kind, key,
       h('button', { class: 'chip-remove', title: t('common.remove'), onclick: () => onChange(keys.filter((k) => k !== key)) }, '✕'))),
-    h('button', { class: 'btn small', onclick: () => openPicker({
-      title, selected: keys, icon: pickerIcon(kind), items: pickerItems(kind), onDone: onChange }) }, t('common.choose')));
+    h('button', { class: 'btn small', onclick: () => chooseObjects({
+      kind, title, selected: keys, onDone: onChange }) }, t('common.choose')));
 }
 
 // A button choosing one object, with a clear button.
@@ -244,8 +244,8 @@ function amounts(field, get, put) {
   const rows = ((inner !== null && parseScript(inner)) || [])
     .filter((entry) => entry.key && typeof entry.value === 'string').map((entry) => ({ key: entry.key, amount: entry.value }));
   const write = (list) => put(key, list.length ? blockText(key, list.map((row) => `${row.key} = ${row.amount}`)) : null);
-  const add = () => openPicker({
-    title: t('fset.label.' + key), selected: [], icon: pickerIcon(pick),
+  const add = () => chooseObjects({
+    kind: pick, title: t('fset.label.' + key), selected: [],
     items: pickerItems(pick).filter((item) => !rows.some((row) => row.key === item.key)),
     onDone: (keys) => write([...rows, ...keys.map((chosen) => ({ key: chosen, amount: '1' }))]),
   });

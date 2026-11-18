@@ -3,7 +3,8 @@ import { api, textureUrl } from './api.js';
 import { t } from './i18n.js';
 import { store, nameOf, setProject } from './store.js';
 import { h, toast, errorText, openPicker, confirmDialog, imageDialog } from './ui.js';
-import { thumb, objectIcon, pickerIcon } from './icons.js';
+import { thumb, objectIcon } from './icons.js';
+import { chooseObjects, pickerItems } from './choose.js';
 import { bracesBalanced } from './script.js';
 
 // Run an action of a button; failures are shown instead of lost.
@@ -91,6 +92,7 @@ const IMAGE_SIZES = {
   pmg_icon: [120, 120, 'contain'],
   pm_icon: [104, 104, 'contain'],
   law_icon: [302, 302, 'contain'],
+  coa_emblem: [768, 512, 'contain'],
 };
 
 function readBase64(file) {
@@ -104,7 +106,7 @@ function readBase64(file) {
 
 // Turn a picture file into a PNG of the game's size for this kind, after the user saw it.
 // DDS files are kept as they are. Resolves to the image's game path, or null when cancelled.
-async function importImage(kind, file) {
+export async function importImage(kind, file) {
   const [width, height, fit] = IMAGE_SIZES[kind];
   const size = `${width}×${height}`;
   let data;
@@ -179,21 +181,12 @@ export function imageField({ label, value, paths, wide = false, kind = null, onC
         kind && h('button', { class: 'btn', title: t('image.import_hint'), onclick: upload }, t('image.import')))));
 }
 
-// Game objects of a kind as picker items.
-export function pickerItems(kind) {
-  return store.data[kind].filter((item) => !item.sea).map((item) => ({
-    key: item.key, name: item.name || item.key, used: item.used,
-    sub: item.group_name || item.good_name || (item.era && t('cond.era', { n: item.era }))
-      || (item.region && nameOf('regions', item.region)) || item.key,
-  }));
-}
+export { pickerItems };
 
-// A list of chosen game objects shown as removable chips, with a picker to add more.
-// onChange(keys) stores the new list and redraws.
-export function keyChips({ keys, kind, label, hint, toggle, onChange }) {
-  const pick = () => openPicker({
-    title: label, selected: keys, toggle, icon: pickerIcon(kind), items: pickerItems(kind), onDone: onChange,
-  });
+// A list of chosen game objects shown as removable chips, with a picker (or the map, for regions) to
+// add more. onChange(keys) stores the new list and redraws. `map`: what else the map window takes.
+export function keyChips({ keys, kind, label, hint, toggle, map, onChange }) {
+  const pick = () => chooseObjects({ kind, title: label, selected: keys, toggle, map, onDone: onChange });
   return h('div', { class: 'chip-field' },
     h('div', { class: 'row' },
       h('span', { class: 'field-label' }, label),

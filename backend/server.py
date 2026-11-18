@@ -16,6 +16,8 @@ from urllib.parse import parse_qs, urlparse
 from . import mods, project, textures
 from .companies import normalize_company, validate_company
 from .countries import is_empty_start, normalize_start, validate_start
+from .territory import World
+from .diplomacy import sync_diplomacy
 from .factories import normalize_factory, own_keys, validate_factory
 from .laws import normalize_law, normalize_law_group, validate_law, validate_law_group
 from .monuments import normalize_monument, validate_monument
@@ -173,7 +175,7 @@ class App:
         data = self.require_data()
         rel = rel.replace("\\", "/")
         if (".." in rel.split("/") or rel.startswith("/") or ":" in rel
-                or not rel.lower().endswith((".dds", ".png", ".jpg", ".jpeg"))):
+                or not rel.lower().endswith((".dds", ".png", ".jpg", ".jpeg", ".tga"))):
             raise ApiError("bad_path")
         key = (rel.lower(), size)
         if key in self.texture_cache:
@@ -185,7 +187,7 @@ class App:
             raise ApiError("not_found", 404)
         try:
             raw = path.read_bytes()
-            image = textures.to_browser_image(raw, size)
+            image = textures.to_browser_image(raw, size, rel)
         except (OSError, struct.error):
             raise ApiError("not_found", 404)
         except textures.UnsupportedTexture:
@@ -353,6 +355,8 @@ def api_post(app, path, body):
             return proj
     if path == "/api/project/country_start":
         return save_start(app, body)
+    if path == "/api/country_start/resolve":
+        return resolve_starts(app, body)
     if path == "/api/project/country_start/delete":
         with app.lock:
             path_ = app.require_project()
@@ -515,10 +519,28 @@ def save_start(app, body):
             "institutions": set(data.institutions), "parties": set(data.parties), "cultures": set(data.cultures),
             "states": set(data.states), "religions": set(data.key_lists["religions"]),
             "hierarchies": set(data.social_hierarchies),
+            "provinces": {p for state in data.states.values() for p in state["provinces"]},
+            "pop_types": set(data.pop_types), "buildings": set(data.factories), "pms": set(data.pms),
+            "companies": set(data.companies),
+            # stage 3: diplomacy, treaties and characters
+            "pact_types": set(data.pact_types), "articles": data.treaty_articles, "regions": set(data.regions),
+            "law_types": set(laws), "templates": set(data.character_templates), "traits": set(data.character_traits),
+            "ideologies": set(data.character_ideologies),
+            # stage 4: flags of new countries (pictures imported into the mod count too)
+            "patterns": set(data.coa_patterns), "colored_emblems": set(data.coa_colored),
+            "textured_emblems": set(data.coa_textured) | {image["file"] for image in proj["images"]
+                                                          if image["kind"] == "coa_emblem"},
+            "coa_colors": set(data.coa_colors),
         }
         errors = validate_start(clean, game)
+        if clean["mode"] == "new" and any(s["key"] == clean["key"] and s["mode"] != "new"
+                                          for s in proj["country_starts"]):
+            errors.append("key_exists")
         if errors:
             return {"errors": errors}
+        proj["country_starts"] = take_provinces(clean, proj["country_starts"], data.start_base())
+        sync_diplomacy(clean, proj["country_starts"])
+        proj["country_starts"] = [s for s in proj["country_starts"] if s["key"] == clean["key"] or not is_empty_start(s)]
         index = next((i for i, s in enumerate(proj["country_starts"]) if s["key"] == clean["key"]), None)
         if is_empty_start(clean):
             # everything put back as the game has it: the mod has nothing for this country
@@ -529,6 +551,44 @@ def save_start(app, body):
             proj["country_starts"][index] = clean
         generated = app.save_project(path, proj, body)
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
+
+
+def take_provinces(start, starts, base):
+    """A province belongs to one start: the provinces the saved start takes leave the others' gains
+    (a start left with nothing goes). Its own provinces at the start need no gain, and only those can
+    be released."""
+    owners = {p: s["country"] for shares in base.shares.values() for s in shares for p in s["provinces"]}
+    taken = set(start["gains"])
+    kept = []
+    for other in starts:
+        if other["key"] != start["key"] and taken & set(other["gains"]):
+            other["gains"] = [p for p in other["gains"] if p not in taken]
+            if is_empty_start(other):
+                continue
+        kept.append(other)
+    start["gains"] = [p for p in start["gains"] if owners.get(p) != start["key"]]
+    start["releases"] = [p for p in start["releases"] if owners.get(p) == start["key"] and p not in taken]
+    return kept
+
+
+def resolve_starts(app, body):
+    """The territory, pops and buildings of a country with the start being edited (and the mod's other
+    starts), before its own pop and building lists; and the provinces whose owner the mod changes."""
+    start = None
+    if isinstance(body.get("start"), dict):
+        try:
+            start = normalize_start(body["start"])
+        except (ValueError, TypeError, AttributeError):
+            raise ApiError("bad_request")
+    with app.lock:
+        data = app.require_data()
+        proj = project.load_project(app.require_project())
+    starts = [s for s in proj["country_starts"] if not start or s["key"] != start["key"]]
+    if start:
+        starts.append(start)
+    world = World(data.start_base(), starts, own_lists_of=start["key"] if start else None)
+    return {"owners": world.changed_provinces, "vanished": sorted(world.vanished),
+            "parts": world.country(start["key"]) if start and start["mode"] != "all" else []}
 
 
 class Handler(BaseHTTPRequestHandler):

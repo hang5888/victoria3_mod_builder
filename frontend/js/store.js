@@ -126,7 +126,9 @@ export function lawGroupName(group) {
 // laws every country starts with.
 export function countryStartName(start) {
   if (start.mode === 'all') return t('country.all');
-  return (start.names && start.names[language()]) || nameOf('countries', start.key);
+  const own = start.names && (start.names[language()]
+    || (start.mode === 'new' && Object.values(start.names).find(Boolean)));  // a new country has only its own names
+  return own || nameOf('countries', start.key);
 }
 
 // Colour of a country start: the mod's, else the game's ([r, g, b], or null).

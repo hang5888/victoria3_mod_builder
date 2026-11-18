@@ -170,15 +170,19 @@ function paintState(map, i, selected, hover) {
 // onPoint(stateKey, x, z) is called instead, with the game's map position of the click (as in
 // map locators: x from the left, z from the bottom of the full map).
 // `markerText(count, names)`: the tooltip line for the markers of a state.
+// `groupOf(stateKey)`: states of the same group (as a strategic region) light up together under the mouse.
 export class StateMap {
-  constructor({ onToggle, onPoint = null, markerText = null }) {
+  constructor({ onToggle, onPoint = null, markerText = null, groupOf = null }) {
     this.onToggle = onToggle;
     this.onPoint = onPoint;
+    this.groupOf = groupOf;
+    this.pendingZoom = null;   // where to go once the widget is on the page
     this.markerText = markerText || ((count, names) => t('map.headquarters', { count, names }));
     this.points = [];          // [{x, z, current}] map positions drawn as pins
     this.selected = new Set();
     this.markers = new Map();  // state key -> names of companies headquartered there
     this.showMarkers = true;
+    this.selectedDots = true;  // a dot on each chosen state
     this.map = null;
     this.hover = -1;
     this.zoomed = false;
@@ -202,6 +206,15 @@ export class StateMap {
       this.message.hidden = true;
       this.fit();
       this.ready();
+      if (this.pendingStates) {
+        this.zoomToStates(this.pendingStates);
+        this.pendingStates = null;
+      }
+      if (this.pendingZoom && this.el.clientWidth) {
+        const target = this.pendingZoom;
+        this.pendingZoom = null;
+        this.zoomTo(target);
+      }
     }).catch((error) => {
       console.error(error);
       this.message.textContent = t('map.failed');
@@ -222,7 +235,8 @@ export class StateMap {
       const i = map.keyIndex.get(key);
       if (i !== undefined) wanted.set(i, 'selected');
     }
-    if (this.hover >= 0) wanted.set(this.hover, wanted.has(this.hover) ? 'selected-hover' : 'hover');
+    const hovered = this.hover < 0 ? [] : this.groupOf ? this.groupMembers(this.hover) : [this.hover];
+    for (const i of hovered) wanted.set(i, wanted.has(i) ? 'selected-hover' : 'hover');
     for (const i of new Set([...map.painted.keys(), ...wanted.keys()])) {
       const look = wanted.get(i);
       if (map.painted.get(i) === look) continue;
@@ -231,6 +245,23 @@ export class StateMap {
       else map.painted.delete(i);
     }
     this.draw();
+  }
+
+  // The states in the same group as a state (by number).
+  groupMembers(state) {
+    const map = this.map;
+    const group = this.groupOf(map.states[state].key);
+    if (!group) return [state];
+    if (!this.groups) {
+      this.groups = new Map();
+      map.states.forEach((one, i) => {
+        const key = one.sea ? '' : this.groupOf(one.key);
+        if (!key) return;
+        if (!this.groups.has(key)) this.groups.set(key, []);
+        this.groups.get(key).push(i);
+      });
+    }
+    return this.groups.get(group) || [state];
   }
 
   setSelected(keys) {
@@ -263,6 +294,52 @@ export class StateMap {
     } else {
       this.fit();
     }
+    if (this.pendingZoom) {
+      const target = this.pendingZoom;
+      this.pendingZoom = null;
+      this.zoomTo(target);
+    }
+  }
+
+  // Show a box of the map ([x0, y0, x1, y1] in map pixels) with some room around it; once the widget
+  // is on the page if it is not yet.
+  zoomTo([x0, y0, x1, y1]) {
+    const width = this.el.clientWidth;
+    const height = this.el.clientHeight;
+    if (!this.map || !width) {
+      this.pendingZoom = [x0, y0, x1, y1];
+      return;
+    }
+    const scale = Math.max(this.minScale(), Math.min(width / (Math.max(x1 - x0, 30) * 1.8),
+      height / (Math.max(y1 - y0, 20) * 1.8), 6));
+    this.scale = scale;
+    this.zoomed = scale > this.minScale();
+    this.x = (x0 + x1) / 2 - width / scale / 2;
+    this.y = (y0 + y1) / 2 - height / scale / 2;
+    this.clamp();
+    this.draw();
+  }
+
+  // Go to some states (keys); false when none of them is on the map.
+  zoomToStates(keys) {
+    const map = this.map;
+    if (!map) {
+      this.pendingStates = keys;  // once the map is loaded
+      return false;
+    }
+    const box = [map.width, map.height, -1, -1];
+    for (const key of keys) {
+      const i = map.keyIndex.get(key);
+      const b = i === undefined ? null : map.box[i];
+      if (!b || b[2] < 0) continue;
+      box[0] = Math.min(box[0], b[0]);
+      box[1] = Math.min(box[1], b[1]);
+      box[2] = Math.max(box[2], b[2]);
+      box[3] = Math.max(box[3], b[3]);
+    }
+    if (box[2] < 0) return false;
+    this.zoomTo(box);
+    return true;
   }
 
   minScale() {
@@ -438,7 +515,7 @@ export class StateMap {
         dot(key, 2 + Math.min(companies.length, 8) * 0.45, 'rgba(126, 200, 255, 0.9)');
       }
     }
-    for (const key of this.selected) dot(key, 4.5, '#fff3d0');
+    if (this.selectedDots) for (const key of this.selected) dot(key, 4.5, '#fff3d0');
     // pins at map positions; the current one last, so it is on top
     for (const point of [...this.points].sort((a, b) => Number(a.current) - Number(b.current))) {
       const sx = (point.x / SHRINK - this.x) * scale;
@@ -481,7 +558,6 @@ export class CountryMap extends StateMap {
     this.provinceOwner = null;  // province number -> number of its owner in ownerTags (0: nobody)
     this.ownerTags = [];
     this.zoomedTo = null;       // the country the view went to
-    this.pendingZoom = null;    // where to go once the widget is on the page
   }
 
   setOwners(owners, colors, focus = null) {
@@ -493,28 +569,6 @@ export class CountryMap extends StateMap {
 
   ready() {
     this.paint();
-  }
-
-  resize() {
-    super.resize();
-    if (this.pendingZoom && this.map && this.el.clientWidth) {
-      this.zoomTo(this.pendingZoom);
-      this.pendingZoom = null;
-    }
-  }
-
-  // Show a box of the map ([x0, y0, x1, y1] in map pixels) with some room around it.
-  zoomTo([x0, y0, x1, y1]) {
-    const width = this.el.clientWidth;
-    const height = this.el.clientHeight;
-    const scale = Math.max(this.minScale(), Math.min(width / (Math.max(x1 - x0, 30) * 1.8),
-      height / (Math.max(y1 - y0, 20) * 1.8), 6));
-    this.scale = scale;
-    this.zoomed = scale > this.minScale();
-    this.x = (x0 + x1) / 2 - width / scale / 2;
-    this.y = (y0 + y1) / 2 - height / scale / 2;
-    this.clamp();
-    this.draw();
   }
 
   paint() {
@@ -534,6 +588,9 @@ export class CountryMap extends StateMap {
     const focus = this.focus;
     const focusNumber = focus ? numbers.get(focus.tag) || -1 : 0;
     const marked = focus && focus.state ? map.keyIndex.get(focus.state) : undefined;
+    // states the focused country claims: striped in its colour
+    const claimed = new Set(((focus && focus.claims) || []).map((key) => map.keyIndex.get(key)));
+    const claimColor = focus ? this.colors.get(focus.tag) || NO_COLOR : NO_COLOR;
     const palette = tags.map((tag) => {
       const color = this.colors.get(tag) || NO_COLOR;
       return focus && tag !== focus.tag ? dim(color) : color;
@@ -562,6 +619,7 @@ export class CountryMap extends StateMap {
         } else if (state >= 0) {
           const mine = owner[provinces[i]];
           color = state === marked ? SELECTED : mine ? palette[mine - 1] : unowned;
+          if (claimed.has(state) && mine !== focusNumber && (x + y) % 6 < 2) color = claimColor;
           if (mine === focusNumber && (!near || (x >= near[0] && x <= near[2] && y >= near[1] && y <= near[3]))) {
             if (x < box[0]) box[0] = x;
             if (y < box[1]) box[1] = y;
@@ -588,20 +646,28 @@ export class CountryMap extends StateMap {
     const target = box[2] >= 0 ? box : markedBox;  // a capital away from the country's land: the capital
     if (focus && focus.tag !== this.zoomedTo && target) {
       this.zoomedTo = focus.tag;
-      if (this.el.clientWidth) this.zoomTo(target);
-      else this.pendingZoom = target;  // resize() goes there once the widget is shown
+      this.zoomTo(target);  // once the widget is shown, if it is not yet
     }
     this.draw();
   }
 
-  // The country and state under a point: {tag, state} (tag '' for land nobody owns), or null.
+  // The country, state and province under a point: {tag, state, province} (tag '' for land nobody
+  // owns), or null.
   placeAt(px, py) {
     const at = px < 0 ? null : this.pixelAt(px, py);
     if (at === null || !this.provinceOwner) return null;
     const state = this.map.index[at];
     if (state < 0 || this.map.states[state].sea) return null;
-    const mine = this.provinceOwner[this.map.provinces[at]];
-    return { tag: mine ? this.ownerTags[mine - 1] : '', state: this.map.states[state].key };
+    const province = this.map.provinces[at];
+    const mine = this.provinceOwner[province];
+    return { tag: mine ? this.ownerTags[mine - 1] : '', state: this.map.states[state].key,
+      province: province ? this.map.provinceKeys[province - 1] : '' };
+  }
+
+  // The provinces of a state region, once the map is loaded.
+  provincesOf(stateKey) {
+    const i = this.map ? this.map.keyIndex.get(stateKey) : undefined;
+    return i === undefined ? [] : this.map.states[i].provinces;
   }
 
   hoverAt(px, py) {
@@ -619,7 +685,7 @@ export class CountryMap extends StateMap {
   clickAt(px, py) {
     const place = this.placeAt(px, py);
     if (!place) return;
-    if (this.onState) this.onState(place.state);
+    if (this.onState) this.onState(place.state, place.province);
     else if (place.tag) this.onPick(place.tag);
   }
 }
