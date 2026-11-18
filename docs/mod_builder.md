@@ -11,6 +11,7 @@
 | 奇觀 | [mod_types/monument.md](mod_types/monument.md) | 初版已實作 |
 | 法律 | [mod_types/law.md](mod_types/law.md) | 初版已實作 |
 | 國家開局 | [mod_types/country_start.md](mod_types/country_start.md) | 4 個階段都已實作 |
+| 商品與名貴商品 | [mod_types/goods.md](mod_types/goods.md) | 規格撰寫中 |
 | 其他類型 | 待規劃 | |
 
 ## 1. 專案概述
