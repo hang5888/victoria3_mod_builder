@@ -528,8 +528,8 @@ function rank(order, key) {
   return index < 0 ? order.length : index;
 }
 
-// The board by pop needs: each need a block of the goods in it (in the game's order, then the mod's), and a
-// last block of the goods in none. The blocks fill four columns in order, each going to the shortest.
+// The board by pop needs: each need a row across the board, its goods (in the game's order, then the mod's)
+// in four columns; the goods in no need in a last row the same way.
 function renderNeedColumns() {
   const filtering = Boolean(filters.query.trim() || filters.source);
   const placed = goodRows().map((row) => ({ row, needs: needsOfRow(row) }));
@@ -542,34 +542,20 @@ function renderNeedColumns() {
       need: needs.find((entry) => entry.need === need.key),
       isDefault: need.default === row.key,
     })).filter(Boolean);
-    return { title: need.name || need.key, hint: need.key, size: members.length, cards,
-      add: () => newGood('staple', need.key) };
+    return { title: need.name || need.key, hint: need.key, cards, add: () => newGood('staple', need.key) };
   });
-  // the goods in no need (most industrial goods) are many: a block across the board, below the needs
-  const none = placed.filter((item) => !item.needs.length)
-    .map(({ row }) => shownCard(row, filtering, { id: 'none:' + row.key })).filter(Boolean);
+  blocks.push({ title: t('goods.no_need'), hint: '', add: () => newGood('industrial'),
+    cards: placed.filter((item) => !item.needs.length)
+      .map(({ row }) => shownCard(row, filtering, { id: 'none:' + row.key })).filter(Boolean) });
   const shown = filtering ? blocks.filter((block) => block.cards.length) : blocks;
-  if (!shown.length && !none.length) {
+  if (!shown.length) {
     fill(els.columns, h('p', { class: 'muted small' }, t('goods.no_match')));
     return;
   }
-  const stacks = Array.from({ length: 4 }, () => ({ height: 0, blocks: [] }));
-  for (const block of shown) {
-    const stack = stacks.reduce((low, next) => (next.height < low.height ? next : low));
-    stack.blocks.push(block);
-    stack.height += (filtering ? block.cards.length : block.size) + 2;  // the title and the add button
-  }
-  const addButton = (add) => !filtering && h('button', { class: 'btn law-add', onclick: () => run(add) }, `＋ ${t('goods.new')}`);
-  fill(els.columns,
-    stacks.map((stack) => h('div', { class: 'goods-need-stack' }, stack.blocks.map((block) =>
-      h('section', { class: 'law-column' },
-        h('h3', { class: 'law-column-title', title: block.hint }, block.title),
-        block.cards.length ? block.cards : h('p', { class: 'muted small' }, t('goods.no_goods')),
-        addButton(block.add))))),
-    (none.length > 0 || !filtering) && h('section', { class: 'law-column goods-no-need' },
-      h('h3', { class: 'law-column-title' }, t('goods.no_need')),
-      h('div', { class: 'goods-no-need-grid' }, none),
-      addButton(() => newGood('industrial'))));
+  fill(els.columns, shown.map((block) => h('section', { class: 'law-column goods-need-block' },
+    h('h3', { class: 'law-column-title', title: block.hint }, block.title),
+    block.cards.length ? h('div', { class: 'goods-need-grid' }, block.cards) : h('p', { class: 'muted small' }, t('goods.no_goods')),
+    !filtering && h('button', { class: 'btn law-add', onclick: () => run(block.add) }, `＋ ${t('goods.new')}`))));
 }
 
 function renderCategoryColumns() {
@@ -588,7 +574,8 @@ function renderCategoryColumns() {
 }
 
 // A good on the board. In the needs view `extra` tells which card it is (a good can be in two needs),
-// its entry in that need and whether it is the need's default good.
+// its entry in that need and whether it is the need's default good: a card in a need shows its weight and
+// shares where the others show the price (the price is then in the tooltip).
 function goodCard(row, prestige, shown, filtering, extra = {}) {
   const good = rowItem(row);
   const id = extra.id || row.key;
@@ -600,16 +587,17 @@ function goodCard(row, prestige, shown, filtering, extra = {}) {
   };
   const entry = extra.need;
   const shares = entry ? NEED_FIELDS.filter((name) => entry[name] !== '' && entry[name] != null)
-    .map((name) => `${t('goods.need_field.' + name)} ${entry[name]}`) : [];
+    .map((name) => `${t('goods.need_short.' + name)} ${entry[name]}`) : [];
+  const price = t('goods.price_short', { cost: good.cost_text || good.cost });
   const changes = prestige.filter((p) => p.mine).length;
   return h('div', { class: 'law-group' + (open ? ' open' : '') },
     h('button', { class: 'law-group-head', onclick: filtering ? null : toggle, title: row.key },
       thumb(good.texture, 128, 'law-group-icon'),
-      h('span', { class: 'law-group-text' },
+      h('span', { class: 'law-group-text', title: entry ? price : null },
         h('span', { class: 'law-group-name' }, goodRowName(row),
           extra.isDefault && h('span', { class: 'goods-default', title: t('goods.need_default') }, ' ★')),
-        h('span', { class: 'muted small' }, t('goods.price_short', { cost: good.cost_text || good.cost })),
-        shares.length > 0 && h('span', { class: 'muted small' }, shares.join(' · '))),
+        entry ? shares.length > 0 && h('span', { class: 'muted small' }, shares.join(' · '))
+          : h('span', { class: 'muted small' }, price)),
       row.mine && h('span', { class: 'badge accent' }, row.mine.mode === 'override' ? t('law.modified') : t('law.added')),
       changes > 0 && h('span', { class: 'badge accent', title: t('goods.prestige_changed_hint') },
         t('law.changed', { count: changes })),
