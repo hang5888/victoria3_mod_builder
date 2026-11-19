@@ -19,6 +19,9 @@ from .countries import is_empty_start, normalize_start, validate_start
 from .territory import World
 from .diplomacy import sync_diplomacy
 from .factories import normalize_factory, own_keys, validate_factory
+from .goods import (CATEGORIES as GOODS_CATEGORIES, MODIFIERS as GOODS_MODIFIERS, normalize_good,
+                    normalize_prestige_good, same_definition, validate_good, validate_prestige_good)
+from .factories import own_pms
 from .laws import normalize_law, normalize_law_group, validate_law, validate_law_group
 from .monuments import normalize_monument, validate_monument
 from .gamedata import LAW_CATEGORIES, GameData, game_languages
@@ -94,7 +97,8 @@ class App:
         keep = (body or {}).get("keep_images") or []
         keep = [k for k in keep if isinstance(k, str)] if isinstance(keep, list) else []
         data = self.require_data()
-        return project.save_project(path, proj, data.modifier_templates, keep, data.start_base())
+        return project.save_project(path, proj, data.modifier_templates, keep, data.start_base(),
+                                    {"needs": data.pop_needs, "templates": data.goods_templates})
 
     def project_image(self, rel):
         """An image imported into the current project (not part of the game data)."""
@@ -353,6 +357,29 @@ def api_post(app, path, body):
             proj["laws"] = [law for law in proj["laws"] if law["key"] != body.get("key")]
             app.save_project(path_, proj, body)
             return proj
+    if path == "/api/project/good":
+        return save_good(app, body)
+    if path == "/api/project/good/delete":
+        # a new good goes with the mod's prestige goods of it
+        with app.lock:
+            path_ = app.require_project()
+            proj = project.load_project(path_)
+            key = body.get("key")
+            gone = next((good for good in proj["goods"] if good["key"] == key), None)
+            proj["goods"] = [good for good in proj["goods"] if good["key"] != key]
+            if gone and gone["mode"] == "new":
+                proj["prestige_goods"] = [good for good in proj["prestige_goods"] if good["base_good"] != key]
+            app.save_project(path_, proj, body)
+            return proj
+    if path == "/api/project/prestige_good":
+        return save_prestige_good(app, body)
+    if path == "/api/project/prestige_good/delete":
+        with app.lock:
+            path_ = app.require_project()
+            proj = project.load_project(path_)
+            proj["prestige_goods"] = [good for good in proj["prestige_goods"] if good["key"] != body.get("key")]
+            app.save_project(path_, proj, body)
+            return proj
     if path == "/api/project/country_start":
         return save_start(app, body)
     if path == "/api/country_start/resolve":
@@ -494,6 +521,83 @@ def save_law_group(app, body):
             for law in proj["laws"]:
                 if law["group"] == original_key:
                     law["group"] = clean["key"]
+        generated = app.save_project(path, proj, body)
+        return {"errors": [], "project": proj, "generated": generated, "dir": path}
+
+
+def rename_good(proj, old, new):
+    """A new good of the mod got another key: what the mod uses it in follows."""
+    buildings = [*proj.get("factories", []), *proj.get("monuments", [])]
+    names = {pattern.format(old): pattern.format(new) for pattern in GOODS_MODIFIERS}
+    for pm in own_pms(buildings):
+        for row in pm["inputs"] + pm["outputs"]:
+            if row.get("good") == old:
+                row["good"] = new
+        for modifier in pm.get("modifiers", []):
+            if modifier.get("key") in names:
+                modifier["key"] = names[modifier["key"]]
+    for good in proj["prestige_goods"]:
+        if good["base_good"] == old:
+            good["base_good"] = new
+
+
+def save_good(app, body):
+    """Add or update one good in the current project and regenerate the mod files."""
+    if not isinstance(body.get("good"), dict):
+        raise ApiError("bad_request")
+    try:
+        clean = normalize_good(body["good"])
+    except (ValueError, TypeError, AttributeError):
+        raise ApiError("bad_request")
+    original_key = body.get("original_key") or clean["key"]
+    with app.lock:
+        data = app.require_data()
+        path = app.require_project()
+        proj = project.load_project(path)
+        others = [good for good in proj["goods"] if good["key"] != original_key]
+        categories = set(GOODS_CATEGORIES) | {good["category"] for good in data.goods.values()}
+        game = {"goods": set(data.goods), "needs": set(data.pop_needs), "categories": categories}
+        errors = validate_good(clean, game, others)
+        if errors:
+            return {"errors": errors}
+        if clean["mode"] == "override" and clean["key"] in data.goods:
+            # only what changed is written: the definition, the colour (the needs are compared when writing)
+            clean["definition"] = not same_definition(clean, data.goods[clean["key"]])
+            clean["recolor"] = clean["color"] is not None and clean["color"] != data.goods_colors.get(clean["key"])
+        index = next((i for i, good in enumerate(proj["goods"]) if good["key"] == original_key), None)
+        if index is None:
+            proj["goods"].append(clean)
+        else:
+            proj["goods"][index] = clean
+            if clean["mode"] == "new" and original_key != clean["key"]:
+                rename_good(proj, original_key, clean["key"])
+        generated = app.save_project(path, proj, body)
+        return {"errors": [], "project": proj, "generated": generated, "dir": path}
+
+
+def save_prestige_good(app, body):
+    """Add or update one prestige good in the current project and regenerate the mod files."""
+    if not isinstance(body.get("good"), dict):
+        raise ApiError("bad_request")
+    try:
+        clean = normalize_prestige_good(body["good"])
+    except (ValueError, TypeError, AttributeError):
+        raise ApiError("bad_request")
+    original_key = body.get("original_key") or clean["key"]
+    with app.lock:
+        data = app.require_data()
+        path = app.require_project()
+        proj = project.load_project(path)
+        others = [good for good in proj["prestige_goods"] if good["key"] != original_key]
+        goods = set(data.goods) | {good["key"] for good in proj["goods"]}
+        errors = validate_prestige_good(clean, {"prestige_goods": set(data.prestige_goods), "goods": goods}, others)
+        if errors:
+            return {"errors": errors}
+        index = next((i for i, good in enumerate(proj["prestige_goods"]) if good["key"] == original_key), None)
+        if index is None:
+            proj["prestige_goods"].append(clean)
+        else:
+            proj["prestige_goods"][index] = clean
         generated = app.save_project(path, proj, body)
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
 

@@ -32,7 +32,7 @@ export function languageName(key) {
 const INDEXED = ['companies', 'buildings', 'modifiers', 'states', 'regions', 'countries', 'prestige_goods', 'categories',
   'technologies', 'cultures', 'factories', 'building_groups', 'pmgs', 'pms', 'goods', 'pop_types', 'laws',
   'principles', 'identities', 'geographic_regions', 'religions', 'straits', 'culture_traits', 'lenses',
-  'law_groups', 'law_categories', 'ideologies', 'interest_groups', 'institutions', 'social_hierarchies'];
+  'law_groups', 'law_categories', 'ideologies', 'interest_groups', 'institutions', 'social_hierarchies', 'pop_needs'];
 
 // Game data for the current language, or null when nothing is loaded yet.
 export async function loadData() {
@@ -45,9 +45,12 @@ export async function loadData() {
     const index = { sources: new Map(data.sources.map((s) => [s.id, s])) };
     for (const kind of INDEXED) index[kind] = new Map(data[kind].map((item) => [item.key, item]));
     data.gameBuildings = data.buildings;
+    data.gameGoods = data.goods;
+    data.gamePrestigeGoods = data.prestige_goods;
     store.data = data;
     store.index = index;
     listProjectBuildings();
+    listProjectGoods();
   }
   return store.data;
 }
@@ -66,6 +69,7 @@ export function keptImages(except = null) {
 export function setProject(project) {
   store.project = project;
   listProjectBuildings();
+  listProjectGoods();
   return project;
 }
 
@@ -82,6 +86,28 @@ function listProjectBuildings() {
   });
   data.buildings = [...data.gameBuildings, ...own];
   index.buildings = new Map(data.buildings.map((building) => [building.key, building]));
+}
+
+// Goods and prestige goods of the mod can be chosen wherever goods are chosen (production methods,
+// companies); its changes to the game's goods (price, icon, name) count everywhere too.
+function listProjectGoods() {
+  const { data, project } = store;
+  if (!data || !project) return;
+  const mine = new Map((project.goods || []).map((good) => [good.key, good]));
+  const goodOf = (good) => ({ ...good, name: goodName(good), icon: good.texture, cost: Number(good.cost) || 0,
+    cost_text: good.cost, mine: true });
+  data.goods = [...data.gameGoods.map((good) => (mine.has(good.key) ? { ...good, ...goodOf(mine.get(good.key)) } : good)),
+    ...(project.goods || []).filter((good) => good.mode === 'new' && !data.gameGoods.some((g) => g.key === good.key))
+      .map(goodOf)];
+  store.index.goods = new Map(data.goods.map((good) => [good.key, good]));
+  const prestige = new Map((project.prestige_goods || []).map((good) => [good.key, good]));
+  const prestigeOf = (good) => ({ ...good, name: prestigeGoodName(good), icon: good.texture, base: good.base_good,
+    good_name: nameOf('goods', good.base_good), mine: true });
+  data.prestige_goods = [
+    ...data.gamePrestigeGoods.map((good) => (prestige.has(good.key) ? { ...good, ...prestigeOf(prestige.get(good.key)) } : good)),
+    ...(project.prestige_goods || []).filter((good) => good.mode === 'new'
+      && !data.gamePrestigeGoods.some((g) => g.key === good.key)).map(prestigeOf)];
+  store.index.prestige_goods = new Map(data.prestige_goods.map((good) => [good.key, good]));
 }
 
 export function dropData() {
@@ -116,6 +142,15 @@ export function lawName(law) {
   const original = law.mode === 'override' && store.index ? store.index.laws.get(law.key) : null;
   return law.names[language()] || (original && original.name) || law.names.english || law.key || t('law.unnamed');
 }
+
+// Name of a good or prestige good of the project, by the same rules (the game's goods of `kind`).
+function ownName(item, kind, unnamed) {
+  const game = item.mode === 'override' && store.data ? store.data[kind].find((g) => g.key === item.key) : null;
+  return item.names[language()] || (game && game.name) || item.names.english || item.key || unnamed;
+}
+
+export const goodName = (good) => ownName(good, 'gameGoods', t('goods.unnamed'));
+export const prestigeGoodName = (good) => ownName(good, 'gamePrestigeGoods', t('pgood.unnamed'));
 
 // Name of a new law group of the project.
 export function lawGroupName(group) {

@@ -11,6 +11,7 @@ from .countries import (COUNTRY_TYPES, HISTORY_DIRS, LITERACY_LEVELS, TARIFF_LEV
 from .characters import empty_characters, read_characters, template_info, COMMANDER_RANKS
 from .diplomacy import DIPLOMACY_FOLDER, TREATY_FOLDER, read_diplomacy, read_treaties
 from .flags import COLORED_DIR, PATTERN_DIR, TEXTURED_DIR
+from .goods import TEMPLATE_GOOD, ENGLISH_TEMPLATES, good_from_block, need_from_block, prestige_good_from_block
 from .laws import law_from_block, stances_from_block
 from .territory import STATE_DIRS, read_state_parts, read_states, state_blocks
 from .factories import (MODIFIER_SUFFIXES, MODIFIER_TEMPLATE_BUILDING, factory_from_block, pm_from_block,
@@ -37,6 +38,8 @@ BUILDING_BACKGROUND_DIR = "gfx/interface/icons/building_icons/backgrounds"
 PM_ICON_DIR = "gfx/interface/icons/production_method_icons"
 PMG_ICON_DIR = "gfx/interface/icons/generic_icons"
 LAW_ICON_DIR = "gfx/interface/icons/law_icons"
+GOODS_ICON_DIR = "gfx/interface/icons/goods_icons"
+PRESTIGE_ICON_DIR = "gfx/interface/icons/goods_icons/prestige_goods"
 # The columns of the game's law screen, in order (law_group_category of the law groups),
 # and the interface texts naming them.
 LAW_CATEGORIES = {"power_structure": "POWER_STRUCTURE", "economy": "ECONOMY", "human_rights": "HUMAN_RIGHTS"}
@@ -329,14 +332,14 @@ class GameData:
         self.pms = {key: {**pm_from_block(key, block), "source": source.id}
                     for key, (block, source, _file) in self.load_db("common/production_methods").items()}
         self.goods = {}
-        for key, (block, _source, _file) in self.load_db("common/goods").items():
-            texture, cost, category = block.get("texture"), block.get("cost"), block.get("category")
-            try:
-                cost = float(cost)
-            except (TypeError, ValueError):
-                cost = 0
-            self.goods[key] = {"icon": texture if isinstance(texture, str) else "", "cost": cost,
-                               "category": category if isinstance(category, str) else ""}
+        origins = {}
+        for key, (block, source, rel_name) in self.load_db("common/goods", origins).items():
+            good = good_from_block(key, block)
+            good["source"] = source.id
+            good["file"] = rel_name
+            good["sources"] = [s.id for s, _b, _f in origins[key]]
+            good["versions"] = [{**good_from_block(key, b), "source": s.id, "file": f} for s, b, f in origins[key][:-1]]
+            self.goods[key] = good
         self.pop_types = {}
         for key, (block, _source, _file) in self.load_db("common/pop_types").items():
             texture = block.get("texture")
@@ -401,11 +404,16 @@ class GameData:
                                       "raw": block.text[block.start:block.end]}  # copied when it is overridden
         self.countries = list(self.country_defs)
         self.prestige_goods = {}
-        for key, (block, _source, _file) in self.load_db("common/prestige_goods").items():
-            base = block.get("base_good")
-            texture = block.get("texture")
-            self.prestige_goods[key] = {"base": base if isinstance(base, str) else "",
-                                        "icon": texture if isinstance(texture, str) else ""}
+        origins = {}
+        for key, (block, source, rel_name) in self.load_db("common/prestige_goods", origins).items():
+            good = prestige_good_from_block(key, block)
+            good["source"] = source.id
+            good["file"] = rel_name
+            good["sources"] = [s.id for s, _b, _f in origins[key]]
+            good["versions"] = [{**prestige_good_from_block(key, b), "source": s.id, "file": f}
+                                for s, b, f in origins[key][:-1]]
+            self.prestige_goods[key] = good
+        self._load_goods_extras()
         self.technologies = {}
         for key, (block, _source, _file) in self.load_db("common/technology/technologies").items():
             texture, era, category = block.get("texture"), block.get("era"), block.get("category")
@@ -448,6 +456,26 @@ class GameData:
         self._load_wages()
         self._load_laws()
         self._load_map_objects()
+
+    def _load_goods_extras(self):
+        """What goods are bought with (the pops' needs) and their market chart colours."""
+        self.pop_needs = {key: need_from_block(block)
+                          for key, (block, _source, _file) in self.load_db("common/pop_needs").items()}
+        self.goods_colors = {}
+        for source, path, rel_name in self.fs.list_files("common/named_colors", ".txt"):
+            try:
+                root = pdx_script.parse(read_text(path))
+            except (OSError, RecursionError) as error:
+                self.warnings.append(f"{source.name}: common/named_colors/{rel_name}: {error}")
+                continue
+            for block in root.get_all("colors"):
+                if not isinstance(block, Block):
+                    continue
+                for entry in block.entries:
+                    if entry.key in self.goods:
+                        color = parse_color(entry.value)
+                        if color:
+                            self.goods_colors[entry.key] = color
 
     def _load_laws(self):
         """Laws with their groups, and what decides the interest groups' stances on them."""
@@ -728,6 +756,10 @@ class GameData:
                                 | {pmg["texture"] for pmg in self.pmgs.values() if pmg["texture"]})
         self.law_icons = sorted(folder(LAW_ICON_DIR) | {v["icon"] for law in self.laws.values()
                                                          for v in (law, *law["versions"]) if v["icon"]})
+        self.goods_icons = sorted(folder(GOODS_ICON_DIR) | {good["texture"] for good in self.goods.values()
+                                                             if good["texture"]})
+        self.prestige_icons = sorted(folder(PRESTIGE_ICON_DIR) | {good["texture"] for good in self.prestige_goods.values()
+                                                                   if good["texture"]})
 
     # -------------------------------------------------------- localization
 
@@ -807,7 +839,13 @@ class GameData:
             "building_groups": groups,
             "pmgs": [{**pmg, "name": loc.name(key)} for key, pmg in self.pmgs.items()],
             "pms": [{**pm, "name": loc.name(key)} for key, pm in self.pms.items()],
-            "goods": [{"key": key, "name": loc.name(key), **good} for key, good in self.goods.items()],
+            # "icon" and "cost" (a number) are what the pickers and the factory estimate use
+            "goods": [{**good, "name": loc.name(key), "icon": good["texture"], "cost": _number(good["cost"], 0.0),
+                       "cost_text": good["cost"], "color": self.goods_colors.get(key)}
+                      for key, good in self.goods.items()],
+            "pop_needs": [{"key": key, "name": loc.name(key), **need} for key, need in self.pop_needs.items()],
+            "goods_icons": self.goods_icons,
+            "prestige_icons": self.prestige_icons,
             "pop_types": [{"key": key, "name": loc.name(key), **pop} for key, pop in self.pop_types.items()],
             "buy_packages": [[level, round(cost, 2)] for level, cost in sorted(self.buy_packages.items())],
             "working_adult_ratio": self.working_adult_ratio,
@@ -842,8 +880,8 @@ class GameData:
                            "region": (self.states.get(info["capital"]) or {}).get("region", "")
                            if info["capital"] else ""}
                           for tag, info in ((tag, self.country_defs[tag]) for tag in self.countries)],
-            "prestige_goods": [{"key": key, "name": loc.name(key), "icon": good["icon"],
-                                "good_name": loc.name(good["base"]) if good["base"] else ""}
+            "prestige_goods": [{**good, "name": loc.name(key), "icon": good["texture"], "base": good["base_good"],
+                                "good_name": loc.name(good["base_good"]) if good["base_good"] else ""}
                                for key, good in self.prestige_goods.items()],
             "technologies": [{"key": key, "name": loc.name(key), **tech} for key, tech in self.technologies.items()],
             "cultures": [{"key": key, "name": loc.name(key), **traits,
@@ -866,6 +904,12 @@ class GameData:
         loc = self.localization(language)
         texts = {suffix: loc.raw(MODIFIER_TEMPLATE_BUILDING + suffix) for suffix in MODIFIER_SUFFIXES}
         return {suffix: text for suffix, text in texts.items() if text}
+
+    def goods_templates(self, language):
+        """The game's texts for TEMPLATE_GOOD's modifiers and its name, to copy for new goods."""
+        loc = self.localization(language)
+        texts = {pattern: loc.raw(pattern.format(TEMPLATE_GOOD)) for pattern in ENGLISH_TEMPLATES}
+        return {"name": loc.raw(TEMPLATE_GOOD), "texts": {p: text for p, text in texts.items() if text}}
 
     def country_payload(self, language):
         """What the country start pages need: every country with how it starts, and the presets."""

@@ -6,12 +6,13 @@ import { renderHome } from './home.js';
 import { renderCompany } from './company.js';
 import { renderFactory, renderMonument } from './factory.js';
 import { renderLaw } from './law.js';
+import { renderGoods } from './goods.js';
 import { renderCountry } from './country.js';
 import { h, toast, errorText } from './ui.js';
 
 const view = document.getElementById('view');
 const routes = { home: renderHome, company: renderCompany, factory: renderFactory, monument: renderMonument,
-  law: renderLaw, country: renderCountry };
+  law: renderLaw, goods: renderGoods, country: renderCountry };
 
 function currentRoute() {
   const name = location.hash.replace(/^#\/?/, '');
@@ -27,6 +28,7 @@ function renderHeader() {
     h('a', { href: '#/factory', class: route === 'factory' ? 'active' : '' }, t('nav.factory')),
     h('a', { href: '#/monument', class: route === 'monument' ? 'active' : '' }, t('nav.monument')),
     h('a', { href: '#/law', class: route === 'law' ? 'active' : '' }, t('nav.law')),
+    h('a', { href: '#/goods', class: route === 'goods' ? 'active' : '' }, t('nav.goods')),
     h('a', { href: '#/country', class: route === 'country' ? 'active' : '' }, t('nav.country')));
   document.getElementById('project-label').textContent =
     state.project ? t('header.project', { name: state.project.name }) : '';

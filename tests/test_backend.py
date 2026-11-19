@@ -19,6 +19,7 @@ from backend.gamedata import FileSystem, GameData, Source  # noqa: E402
 from backend.monuments import monument_to_script, normalize_monument, validate_monument  # noqa: E402
 from backend.laws import (law_from_block, law_group_to_script, law_to_script, normalize_law,  # noqa: E402
                           normalize_law_group, stances_from_block, validate_law, validate_law_group)
+from backend import goods  # noqa: E402
 from backend.localization import Localization, read_loc_file, read_loc_text  # noqa: E402
 from backend.mods import PROJECT_FILE  # noqa: E402
 from backend.pdx_script import Block, braces_balanced, parse, split_prefix  # noqa: E402
@@ -479,6 +480,163 @@ def sample_group(**changes):
                                  "blocks": {"enable": "any_scope_state = { is_coastal = yes }"}})
     group.update(changes)
     return group
+
+
+GOOD = """\
+automobiles = {
+	texture = "gfx/interface/icons/goods_icons/automobiles.dds"
+	cost = 100
+	category = luxury
+
+	obsession_chance = 1.0
+	prestige_factor = 10
+	tradeable = no
+	pop_consumption_can_add_infrastructure = yes
+	odd_field = { a b }
+}
+"""
+
+NEEDS = """\
+popneed_luxury_items = {
+	default = automobiles
+	prestige_goods_demand_increase = 1.0
+
+	entry = {
+		goods = automobiles
+		weight = 2
+		max_supply_share = 1.0
+		min_supply_share = 0.0
+	}
+	entry = {
+		goods = porcelain
+	}
+}
+popneed_free_movement = {
+	default = transportation
+	entry = { goods = transportation weight = 1 }
+}
+"""
+
+
+def sample_good(**changes):
+    good = goods.normalize_good({"key": "alloys", "names": {"english": "Alloys"}, "texture": "gfx/a.dds", "cost": "60",
+                                 "category": "industrial", "color": [10, 20, 30],
+                                 "needs": [{"need": "popneed_luxury_items", "weight": "1", "max_supply_share": "0.5",
+                                            "min_supply_share": ""}]})
+    good.update(changes)
+    return good
+
+
+def game_needs():
+    return {split_prefix(e.key)[1]: goods.need_from_block(e.value) for e in parse(NEEDS).entries}
+
+
+class GoodsTest(unittest.TestCase):
+    def test_read_fields(self):
+        good = goods.good_from_block(*first_block(GOOD))
+        self.assertEqual((good["cost"], good["category"], good["obsession_chance"], good["prestige_factor"]),
+                         ("100", "luxury", "1.0", "10"))
+        self.assertFalse(good["tradeable"])
+        self.assertTrue(good["pop_consumption_can_add_infrastructure"])
+        self.assertEqual(good["extra"], "odd_field = { a b }")
+
+    def test_round_trip(self):
+        good = goods.good_from_block(*first_block(GOOD))
+        again = goods.good_from_block(*first_block(goods.good_to_script(good)))
+        self.assertTrue(goods.same_definition(again, good))
+        self.assertFalse(goods.same_definition({**again, "cost": "90"}, good))
+        self.assertTrue(goods.same_definition({**again, "cost": "100.0"}, good))
+        override = goods.good_to_script({**good, "mode": "override"})
+        self.assertTrue(override.startswith("REPLACE_OR_CREATE:automobiles = {"))
+
+    def test_validate(self):
+        game = {"goods": {"automobiles"}, "needs": {"popneed_luxury_items"}, "categories": set(goods.CATEGORIES)}
+        self.assertEqual(goods.validate_good(sample_good(), game, []), [])
+        bad = sample_good(key="automobiles", texture="", cost="0", category="x", obsession_chance="a",
+                          needs=[{"need": "popneed_x", "weight": "a", "max_supply_share": "", "min_supply_share": ""}],
+                          extra="{")
+        self.assertEqual(goods.validate_good(bad, game, []), ["key_exists", "icon_missing", "cost", "category", "number",
+                                                              "need", "need_value", "braces:extra"])
+        self.assertEqual(goods.validate_good(sample_good(key="automobiles", mode="override"), game, []), [])
+        self.assertEqual(goods.validate_good(sample_good(), game, [sample_good()]), ["key_exists"])
+
+    def test_normalize_drops_unsafe_input(self):
+        for raw in ({"key": "x", "category": "a b"}, {"key": "x", "color": [1, 2]}, {"key": "x", "color": [1, 2, 300]},
+                    {"key": "x", "needs": "x"}, {"key": "x", "needs": [{"need": "bad need"}]}):
+            with self.assertRaises(ValueError, msg=raw):
+                goods.normalize_good(raw)
+        good = goods.normalize_good({"key": " x ", "mode": "weird", "cost": " 5 ", "tradeable": 0})
+        self.assertEqual((good["key"], good["mode"], good["cost"], good["tradeable"]), ("x", "new", "5", False))
+        with self.assertRaises(ValueError):
+            goods.normalize_prestige_good({"key": "x", "base_good": "a b"})
+
+    def test_needs_read_and_unchanged(self):
+        needs = game_needs()
+        luxury = needs["popneed_luxury_items"]
+        self.assertEqual(luxury["default"], "automobiles")
+        self.assertEqual(luxury["extra"], "prestige_goods_demand_increase = 1.0")
+        self.assertEqual([e["goods"] for e in luxury["entries"]], ["automobiles", "porcelain"])
+        self.assertEqual(luxury["entries"][1]["weight"], "")
+        # an override with the game's entries writes nothing
+        same = sample_good(key="automobiles", mode="override", needs=[
+            {"need": "popneed_luxury_items", "weight": "2.0", "max_supply_share": "1", "min_supply_share": "0"}])
+        self.assertEqual(goods.needs_script([same], needs), ([], []))
+
+    def test_needs_inject_new_entries(self):
+        definitions, whole = goods.needs_script([sample_good()], game_needs())
+        self.assertEqual(whole, [])
+        self.assertEqual(len(definitions), 1)
+        entry = parse(definitions[0]).entries[0]
+        self.assertEqual(entry.key, "INJECT:popneed_luxury_items")
+        self.assertEqual(entry.value.get("entry").get("goods"), "alloys")
+        self.assertEqual(entry.value.get("entry").get("min_supply_share"), None)
+
+    def test_needs_rewrite_when_game_entries_change(self):
+        needs = game_needs()
+        # automobiles leaves the luxury items and joins free movement with a new weight
+        moved = sample_good(key="automobiles", mode="override", needs=[
+            {"need": "popneed_free_movement", "weight": "3", "max_supply_share": "", "min_supply_share": ""}])
+        new = sample_good()
+        definitions, whole = goods.needs_script([moved, new], needs)
+        self.assertEqual(whole, ["popneed_luxury_items"])
+        luxury, movement = (parse(d).entries[0] for d in definitions)
+        self.assertEqual(luxury.key, "REPLACE_OR_CREATE:popneed_luxury_items")
+        back = goods.need_from_block(luxury.value)
+        self.assertEqual(back["default"], "automobiles")
+        self.assertEqual(back["extra"], "prestige_goods_demand_increase = 1.0")
+        self.assertEqual([(e["goods"], e["weight"]) for e in back["entries"]], [("porcelain", ""), ("alloys", "1")])
+        self.assertEqual(movement.key, "INJECT:popneed_free_movement")
+        self.assertEqual(movement.value.get("entry").get("weight"), "3")
+
+    def test_prestige_good(self):
+        text = """prestige_good_x = {\n\tpossible = {\n\t\thas_dlc_feature = mp1_content\n\t}\n\tbase_good = artillery\n""" \
+               """\tprestige_bonus = 0.1\n\ttexture = "gfx/x.dds"\n}"""
+        good = goods.prestige_good_from_block(*first_block(text))
+        self.assertEqual((good["base_good"], good["possible"].strip()), ("artillery", "has_dlc_feature = mp1_content"))
+        self.assertEqual(goods.prestige_good_to_script(good), text)
+        game = {"prestige_goods": {"prestige_good_x"}, "goods": {"artillery"}}
+        self.assertEqual(goods.validate_prestige_good({**good, "mode": "override"}, game, []), [])
+        bad = {**good, "base_good": "x", "texture": "", "prestige_bonus": "a", "possible": "{"}
+        self.assertEqual(goods.validate_prestige_good(bad, game, []),
+                         ["key_exists", "base_good", "icon_missing", "prestige_bonus", "braces:possible"])
+
+    def test_new_good_files(self):
+        new = sample_good()
+        modifiers = parse("\n".join(goods.modifiers_script([new])))
+        self.assertEqual([e.key for e in modifiers.entries], ["goods_output_alloys_add", "goods_input_alloys_add",
+                                                              "goods_output_alloys_mult", "goods_input_alloys_mult"])
+        self.assertEqual(modifiers.entries[2].value.get("percent"), "yes")
+        icon = parse(goods.texticons_script([new])[0]).entries[0].value
+        self.assertEqual((icon.get("icon"), icon.get("iconsize").get("texture")), ("alloys", "gfx/a.dds"))
+        colors = parse(goods.colors_script([new, sample_good(key="b", color=None)])[0]).get("colors")
+        self.assertEqual([(e.key, e.value) for e in colors.entries], [("alloys", "rgb { 10 20 30 }")])
+        english = goods.modifier_texts(new, "english", None)
+        self.assertEqual(english["goods_output_alloys_add"], "@alloys! Alloys output")
+        chinese = goods.modifier_texts({**new, "names": {"simp_chinese": "合金"}}, "simp_chinese",
+                                       {"name": "轻武器", "texts": {"goods_input_{}_add": "@small_arms!轻武器投入"}})
+        self.assertEqual(chinese["goods_input_alloys_add"], "@alloys!合金投入")
+        self.assertEqual(chinese["goods_output_alloys_add"], "@alloys! 合金 output")  # no game text: English
+        self.assertEqual(goods.modifier_texts(new, "french", None), {})
 
 
 class LawGroupTest(unittest.TestCase):
@@ -1684,6 +1842,48 @@ class ProjectTest(unittest.TestCase):
         reopened = project.load_project(folder)
         self.assertEqual((reopened["law_groups"], reopened["laws"]), ([group], [first, second]))
 
+    def test_goods(self):
+        folder = Path(project.create_project(str(self.mods), "Market", "1.15.1"))
+        new = sample_good()
+        # only the needs of the game's good change: its definition and colour are not written
+        moved = sample_good(key="automobiles", mode="override", names={}, definition=False, recolor=False, needs=[
+            {"need": "popneed_free_movement", "weight": "3", "max_supply_share": "", "min_supply_share": ""}])
+        prestige = goods.normalize_prestige_good({"key": "prestige_good_alloys", "names": {"english": "Fine Alloys"},
+                                                  "base_good": "alloys", "texture": "gfx/p.dds"})
+        proj = project.load_project(folder)
+        proj["goods"], proj["prestige_goods"] = [new, moved], [prestige]
+        base = {"needs": game_needs(), "templates": lambda lang: None}
+        generated = project.save_project(folder, proj, goods_base=base)
+        self.assertEqual(sorted(generated), [
+            "common/goods/zzz_market_goods.txt",
+            "common/modifier_type_definitions/zzz_market_goods_modifier_types.txt",
+            "common/named_colors/zzz_market_goods_colors.txt",
+            "common/pop_needs/zzz_market_pop_needs.txt",
+            "common/prestige_goods/zzz_market_prestige_goods.txt",
+            "gui/zzz_market_goods_texticons.gui",
+            "localization/english/market_goods_l_english.yml"])
+        written = parse((folder / "common/goods/zzz_market_goods.txt").read_text(encoding="utf-8-sig"))
+        self.assertEqual([e.key for e in written.entries], ["alloys"])
+        needs = parse((folder / "common/pop_needs/zzz_market_pop_needs.txt").read_text(encoding="utf-8-sig"))
+        self.assertEqual([e.key for e in needs.entries], ["REPLACE_OR_CREATE:popneed_luxury_items",
+                                                          "INJECT:popneed_free_movement"])
+        english = read_loc_file(folder / "localization/english/market_goods_l_english.yml")["english"]
+        self.assertEqual(english["alloys"], "Alloys")
+        self.assertEqual(english["prestige_good_alloys"], "Fine Alloys")
+        self.assertEqual(english["goods_input_alloys_mult"], "@alloys! Alloys input")
+        self.assertNotIn("goods_output_automobiles_add", english)
+        self.assertEqual(project.load_project(folder)["goods"], [new, moved])
+        # without the game's needs, the needs file of the last save stays
+        self.assertIn("common/pop_needs/zzz_market_pop_needs.txt", project.save_project(folder, proj))
+        # a changed definition is written as an override
+        proj["goods"] = [{**moved, "definition": True, "needs": []}]
+        proj["prestige_goods"] = []
+        generated = project.save_project(folder, proj, goods_base=base)
+        written = parse((folder / "common/goods/zzz_market_goods.txt").read_text(encoding="utf-8-sig"))
+        self.assertEqual([e.key for e in written.entries], ["REPLACE_OR_CREATE:automobiles"])
+        self.assertNotIn("gui/zzz_market_goods_texticons.gui", generated)
+        self.assertFalse((folder / "gui").exists())
+
     def test_country_starts(self):
         folder = Path(project.create_project(str(self.mods), "Starts", "1.15.1"))
         start = sample_start(names={"english": "Testland"}, adjs={"english": "Testish"},
@@ -1775,7 +1975,14 @@ class InterfaceTextTest(unittest.TestCase):
         "error.": ["offline", "server_error", "not_loaded", "no_project", "folders_invalid", "bad_request",
                    "not_found", "name_missing", "browse_unavailable", "bad_path", "unsupported_texture",
                    "forbidden", "open_folder_failed", "image_kind", "image_too_large", "image_format"],
-        "sidebar.category.": ["company", "factory", "monument", "law", "law_group", "country_start"],
+        "sidebar.category.": ["company", "factory", "monument", "law", "law_group", "good", "prestige_good",
+                              "country_start"],
+        "goods.flag.": ["tradeable", "local", "fixed_price", "pop_consumption_can_add_infrastructure"],
+        "goods.flag_hint.": ["tradeable", "local", "fixed_price", "pop_consumption_can_add_infrastructure"],
+        "goods.need_field.": ["weight", "max_supply_share", "min_supply_share"],
+        "gdproblem.": ["key_missing", "key_invalid", "key_exists", "icon_missing", "cost", "category", "number", "need",
+                       "need_value"],
+        "pgproblem.": ["key_missing", "key_invalid", "key_exists", "base_good", "icon_missing", "prestige_bonus"],
         "country.tab.": ["country", "politics", "technology", "territory", "pops", "buildings", "diplomacy",
                          "characters", "other"],
         "country.part.": ["names", "color", "country_type", "tier", "cultures", "capital", "religion", "social_hierarchy",

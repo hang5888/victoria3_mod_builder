@@ -92,6 +92,8 @@ const IMAGE_SIZES = {
   pmg_icon: [120, 120, 'contain'],
   pm_icon: [104, 104, 'contain'],
   law_icon: [302, 302, 'contain'],
+  goods_icon: [256, 256, 'contain'],
+  prestige_icon: [256, 256, 'contain'],
   coa_emblem: [768, 512, 'contain'],
 };
 

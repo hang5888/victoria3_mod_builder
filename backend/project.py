@@ -19,6 +19,8 @@ from .characters import templates_script
 from .diplomacy import write_diplomacy
 from .factories import (factory_to_script, fill_factory, modifier_texts, own_pmgs, own_pms, pm_to_script,
                         pmg_to_script)
+from .goods import (colors_script, fill_good, fill_prestige_good, good_to_script, modifier_texts as goods_modifier_texts,
+                    modifiers_script, needs_script, prestige_good_to_script, texticons_script)
 from .laws import fill_law, fill_law_group, law_group_to_script, law_texts, law_to_script
 from .localization import write_loc_file
 from .monuments import fill_monument, history_script, locators_script, monument_to_script
@@ -37,6 +39,8 @@ IMAGE_KINDS = {
     "pmg_icon": (120, 120, "contain"),
     "pm_icon": (104, 104, "contain"),
     "law_icon": (302, 302, "contain"),
+    "goods_icon": (256, 256, "contain"),
+    "prestige_icon": (256, 256, "contain"),
     # a picture on a new country's flag: the flag's shape, written as an uncompressed DDS with mipmaps
     # into the folder the game finds the coat of arms pictures in (by file name)
     "coa_emblem": (768, 512, "contain"),
@@ -79,7 +83,7 @@ def create_project(local_mod_dir, name, game_version):
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     project = {"tool": "vic-mod-builder", "format": FORMAT, "name": name, "slug": folder.name,
                "companies": [], "factories": [], "monuments": [], "laws": [], "law_groups": [], "country_starts": [],
-               "images": [], "generated_files": []}
+               "goods": [], "prestige_goods": [], "images": [], "generated_files": []}
     save_project(folder, project)
     return str(folder)
 
@@ -99,6 +103,9 @@ def load_project(project_dir):
     project["monuments"] = [fill_monument(m) for m in project.get("monuments", [])]
     project["laws"] = [fill_law(law) for law in project.get("laws", [])]
     project["law_groups"] = [fill_law_group(group) for group in project.get("law_groups", [])]
+    project["goods"] = [fill_good(good) for good in project.get("goods", []) if isinstance(good, dict)]
+    project["prestige_goods"] = [fill_prestige_good(good) for good in project.get("prestige_goods", [])
+                                 if isinstance(good, dict)]
     project["country_starts"] = [fill_start(start) for start in project.get("country_starts", [])
                                  if isinstance(start, dict)]
     return project
@@ -236,6 +243,7 @@ def used_images(project):
         used.update((building.get("icon"), building.get("background")))
     used.update(item.get("texture") for item in [*own_pmgs(buildings), *own_pms(buildings)])
     used.update(law.get("icon") for law in project.get("laws", []))
+    used.update(good.get("texture") for good in [*project.get("goods", []), *project.get("prestige_goods", [])])
     for start in project.get("country_starts", []):
         if start.get("mode") == "new":
             used.update(flag_images(start.get("flag")))
@@ -316,7 +324,38 @@ def _write_country_starts(root, slug, starts, base, generated):
                 generated.append(rel)
 
 
-def save_project(project_dir, project, modifier_templates=lambda lang: None, keep_images=(), base=None):
+def _write_goods(root, slug, project, goods_base, generated):
+    """Goods and prestige goods: the definitions that changed, the modifiers, text icons and colours of the
+    new goods, the pop needs the goods are in, and the texts."""
+    goods = project.get("goods", [])
+    new = [good for good in goods if good["mode"] == "new"]
+    _write_script(root, f"common/goods/zzz_{slug}_goods.txt",
+                  [good_to_script(good) for good in goods if good["mode"] == "new" or good.get("definition", True)],
+                  generated)
+    _write_script(root, f"common/modifier_type_definitions/zzz_{slug}_goods_modifier_types.txt",
+                  modifiers_script(new), generated)
+    _write_script(root, f"gui/zzz_{slug}_goods_texticons.gui", texticons_script(new), generated)
+    _write_script(root, f"common/named_colors/zzz_{slug}_goods_colors.txt",
+                  colors_script([good for good in goods if good["mode"] == "new" or good.get("recolor", True)]),
+                  generated)
+    needs_rel = f"common/pop_needs/zzz_{slug}_pop_needs.txt"
+    if goods_base is not None:
+        definitions, _whole = needs_script(goods, goods_base["needs"])
+        _write_script(root, needs_rel, definitions, generated)
+    elif needs_rel in project.get("generated_files", []) and any(good["needs"] for good in goods):
+        generated.append(needs_rel)  # without the game's needs it cannot be written again: keep the last one
+    prestige = project.get("prestige_goods", [])
+    _write_script(root, f"common/prestige_goods/zzz_{slug}_prestige_goods.txt",
+                  [prestige_good_to_script(good) for good in prestige], generated)
+    templates = (goods_base or {}).get("templates") or (lambda lang: None)
+    new_keys = {good["key"] for good in new}
+    _write_names(root, slug, "goods", [*goods, *prestige], generated,
+                 lambda item, lang: (goods_modifier_texts(item, lang, templates(lang))
+                                     if item["key"] in new_keys and "category" in item else {}))
+
+
+def save_project(project_dir, project, modifier_templates=lambda lang: None, keep_images=(), base=None,
+                 goods_base=None):
     """Write the project file and regenerate the game files from it.
 
     Imported images in use are packed into the mod; unused ones are deleted,
@@ -326,6 +365,8 @@ def save_project(project_dir, project, modifier_templates=lambda lang: None, kee
     that language (see factories.modifier_texts), or None for the built-in English.
     `base`: the files in effect the country starts are written from (gamedata.StartBase); without it
     the country starts are not written.
+    `goods_base`: {"needs": the game's pop needs, "templates": lang -> texts for new goods' modifiers
+    (gamedata.goods_templates)}; without it the pop needs file of the last save is kept.
     """
     root = Path(project_dir)
     slug = project["slug"]
@@ -372,6 +413,8 @@ def save_project(project_dir, project, modifier_templates=lambda lang: None, kee
                   [law_group_to_script(group) for group in law_groups], generated)
     _write_script(root, f"common/laws/zzz_{slug}_laws.txt", [law_to_script(law) for law in laws], generated)
     _write_texts(root, slug, "laws", [*law_groups, *laws], law_texts, generated)  # key and key_desc for both
+
+    _write_goods(root, slug, project, goods_base, generated)
 
     starts = project.get("country_starts", [])
     if base is not None:

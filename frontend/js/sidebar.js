@@ -4,13 +4,13 @@
 // The editor page passes itself in as
 //   { kind, handles(kind)?, state() -> {key, dirty, kind?}, open(item, kind), remove(item, kind) }
 // where `key` is the key of the opened item in the project (null for a new one). A page that edits
-// several kinds (the law page: laws and law groups) says which with handles(), and which one is
+// several kinds (the law page: laws and law groups; the goods page: goods and prestige goods) says which with handles(), and which one is
 // open with state().kind.
 // The list shows what is saved in the mod: a new item, or a change to one, appears after saving.
 import { api } from './api.js';
 import { t } from './i18n.js';
 import { store, companyName, factoryName, monumentName, lawName, lawGroupName, countryStartName, countryColor,
-  setProject, keptImages } from './store.js';
+  goodName, prestigeGoodName, setProject, keptImages } from './store.js';
 import { h, fill, toast } from './ui.js';
 import { thumb } from './icons.js';
 import { run } from './widgets.js';
@@ -23,6 +23,9 @@ const KINDS = {
   monument: { items: (project) => project.monuments || [], name: monumentName, icon: (item) => item.icon },
   law_group: { items: (project) => project.law_groups || [], name: lawGroupName, icon: () => '', page: 'law' },
   law: { items: (project) => project.laws || [], name: lawName, icon: (item) => item.icon },
+  good: { items: (project) => project.goods || [], name: goodName, icon: (item) => item.texture, page: 'goods' },
+  prestige_good: { items: (project) => project.prestige_goods || [], name: prestigeGoodName, icon: (item) => item.texture,
+    page: 'goods' },
   country_start: { items: (project) => project.country_starts || [], name: countryStartName, icon: () => '',
     swatch: countryColor, page: 'country' },
 };
