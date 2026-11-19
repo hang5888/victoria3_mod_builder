@@ -1,5 +1,6 @@
 // Goods builder. The start screen is the game's market: four columns (staple, industrial, luxury,
-// military) of goods that unfold into their prestige goods. A good or prestige good opens in the
+// military) of goods that unfold into their prestige goods, or the same goods sorted by the pop needs
+// they fill. A good or prestige good opens in the
 // editor: preview on the left, editor in the middle, ✕ back to the board.
 import { api, textureUrl } from './api.js';
 import { t } from './i18n.js';
@@ -35,8 +36,28 @@ let pristine = true;         // nothing changed since it was opened (switching v
 let versionSource = null;    // the source whose version an overridden item was started from
 let autoColor = false;       // the colour of a new good follows its icon until it is set by hand
 let usesCache = null;        // key -> {producers, consumers}, for the preview
-const expanded = new Set();  // goods unfolded on the board
+const expanded = new Set();  // goods unfolded on the board (`need:key` in the needs view)
 const filters = { query: '', source: '' };
+const VIEW_KEY = 'vmb.goods.view';
+let view = readView();       // how the board is sorted: 'category' or 'needs'
+
+function readView() {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'needs' ? 'needs' : 'category';
+  } catch {
+    return 'category';
+  }
+}
+
+function setView(name) {
+  view = name;
+  try {
+    localStorage.setItem(VIEW_KEY, name);
+  } catch {
+    // the board still switches, it is only not remembered
+  }
+  renderBoard();
+}
 const els = {};
 const sections = {};
 
@@ -44,11 +65,12 @@ window.addEventListener('beforeunload', (event) => {
   if (dirty) event.preventDefault();
 });
 
-function blankGood(category) {
+function blankGood(category, need = '') {
   return {
     key: '', mode: 'new', names: {}, texture: '', cost: '', category, ...FLAGS,
     ...Object.fromEntries(NUMBERS.map((name) => [name, ''])), prestige_factor: '5',
-    color: null, needs: [], extra: '',
+    color: null, needs: need ? [{ need, ...Object.fromEntries(NEED_FIELDS.map((name) => [name, ''])) }] : [],
+    extra: '',
   };
 }
 
@@ -361,7 +383,7 @@ function copyPrestige(row) {
   return editPrestige({ ...source, mode: 'new', key, names: name ? { [language()]: name } : {} }, null, true);
 }
 
-const newGood = (category) => editGood(blankGood(category), null);
+const newGood = (category, need = '') => editGood(blankGood(category, need), null);
 const newPrestige = (base) => editPrestige(blankPrestige(base), null);
 
 async function save() {
@@ -471,28 +493,93 @@ function renderBoard() {
   fill(els.board,
     h('div', { class: 'col-head' }, h('h2', {}, t('goods.title')),
       h('span', { class: 'muted' }, t('goods.count', { count: data.gameGoods.length, prestige: data.gamePrestigeGoods.length }))),
+    h('div', { class: 'tabs goods-views' }, ['category', 'needs'].map((name) => h('button', {
+      class: 'tab' + (name === view ? ' active' : ''), onclick: () => setView(name),
+    }, t('goods.view.' + name)))),
     h('div', { class: 'law-filters' }, search, select),
-    h('p', { class: 'muted small' }, t('goods.board_hint')),
+    h('p', { class: 'muted small' }, view === 'needs' ? t('goods.board_hint_needs') : t('goods.board_hint')),
     els.columns);
   renderColumns();
 }
 
 function renderColumns() {
+  if (view === 'needs') renderNeedColumns();
+  else renderCategoryColumns();
+}
+
+// The card of a good when the board is searched or filtered: null when neither it nor its prestige goods match.
+function shownCard(row, filtering, extra) {
+  const prestige = prestigeRows(row.key);
+  let shown = prestige;
+  if (filtering) {
+    shown = prestige.filter((p) => matchesSource(p) && matchesText(prestigeRowName(p), p.key));
+    const self = matchesSource(row) && matchesText(goodRowName(row), row.key);
+    if (!self && !shown.length) return null;
+  }
+  return goodCard(row, prestige, shown, filtering, extra);
+}
+
+// The needs a good is in now: the mod's for a good it has, the game's for the others.
+const needsOfRow = (row) => (row.mine ? row.mine.needs || [] : gameNeedsOf(row.key));
+
+// Where a good is in a list of the game's order; the ones not in it go last.
+function rank(order, key) {
+  const index = order.indexOf(key);
+  return index < 0 ? order.length : index;
+}
+
+// The board by pop needs: each need a block of the goods in it (in the game's order, then the mod's), and a
+// last block of the goods in none. The blocks fill four columns in order, each going to the shortest.
+function renderNeedColumns() {
+  const filtering = Boolean(filters.query.trim() || filters.source);
+  const placed = goodRows().map((row) => ({ row, needs: needsOfRow(row) }));
+  const blocks = store.data.pop_needs.map((need) => {
+    const order = need.entries.map((entry) => entry.goods);
+    const members = placed.filter((item) => item.needs.some((entry) => entry.need === need.key))
+      .sort((a, b) => rank(order, a.row.key) - rank(order, b.row.key));
+    const cards = members.map(({ row, needs }) => shownCard(row, filtering, {
+      id: need.key + ':' + row.key,
+      need: needs.find((entry) => entry.need === need.key),
+      isDefault: need.default === row.key,
+    })).filter(Boolean);
+    return { title: need.name || need.key, hint: need.key, size: members.length, cards,
+      add: () => newGood('staple', need.key) };
+  });
+  // the goods in no need (most industrial goods) are many: a block across the board, below the needs
+  const none = placed.filter((item) => !item.needs.length)
+    .map(({ row }) => shownCard(row, filtering, { id: 'none:' + row.key })).filter(Boolean);
+  const shown = filtering ? blocks.filter((block) => block.cards.length) : blocks;
+  if (!shown.length && !none.length) {
+    fill(els.columns, h('p', { class: 'muted small' }, t('goods.no_match')));
+    return;
+  }
+  const stacks = Array.from({ length: 4 }, () => ({ height: 0, blocks: [] }));
+  for (const block of shown) {
+    const stack = stacks.reduce((low, next) => (next.height < low.height ? next : low));
+    stack.blocks.push(block);
+    stack.height += (filtering ? block.cards.length : block.size) + 2;  // the title and the add button
+  }
+  const addButton = (add) => !filtering && h('button', { class: 'btn law-add', onclick: () => run(add) }, `＋ ${t('goods.new')}`);
+  fill(els.columns,
+    stacks.map((stack) => h('div', { class: 'goods-need-stack' }, stack.blocks.map((block) =>
+      h('section', { class: 'law-column' },
+        h('h3', { class: 'law-column-title', title: block.hint }, block.title),
+        block.cards.length ? block.cards : h('p', { class: 'muted small' }, t('goods.no_goods')),
+        addButton(block.add))))),
+    (none.length > 0 || !filtering) && h('section', { class: 'law-column goods-no-need' },
+      h('h3', { class: 'law-column-title' }, t('goods.no_need')),
+      h('div', { class: 'goods-no-need-grid' }, none),
+      addButton(() => newGood('industrial'))));
+}
+
+function renderCategoryColumns() {
   const filtering = Boolean(filters.query.trim() || filters.source);
   const rows = goodRows();
   const categories = [...CATEGORIES];
   for (const row of rows) if (!categories.includes(rowItem(row).category)) categories.push(rowItem(row).category);
   fill(els.columns, categories.map((category) => {
-    const cards = rows.filter((row) => rowItem(row).category === category).map((row) => {
-      const prestige = prestigeRows(row.key);
-      let shown = prestige;
-      if (filtering) {
-        shown = prestige.filter((p) => matchesSource(p) && matchesText(prestigeRowName(p), p.key));
-        const self = matchesSource(row) && matchesText(goodRowName(row), row.key);
-        if (!self && !shown.length) return null;
-      }
-      return goodCard(row, prestige, shown, filtering);
-    }).filter(Boolean);
+    const cards = rows.filter((row) => rowItem(row).category === category)
+      .map((row) => shownCard(row, filtering)).filter(Boolean);
     return h('section', { class: 'law-column' },
       h('h3', { class: 'law-column-title' }, categoryName(category)),
       cards.length ? cards : h('p', { class: 'muted small' }, t('goods.no_match')),
@@ -500,21 +587,29 @@ function renderColumns() {
   }));
 }
 
-function goodCard(row, prestige, shown, filtering) {
+// A good on the board. In the needs view `extra` tells which card it is (a good can be in two needs),
+// its entry in that need and whether it is the need's default good.
+function goodCard(row, prestige, shown, filtering, extra = {}) {
   const good = rowItem(row);
-  const open = filtering || expanded.has(row.key);
+  const id = extra.id || row.key;
+  const open = filtering || expanded.has(id);
   const toggle = () => {
-    if (expanded.has(row.key)) expanded.delete(row.key);
-    else expanded.add(row.key);
+    if (expanded.has(id)) expanded.delete(id);
+    else expanded.add(id);
     renderColumns();
   };
+  const entry = extra.need;
+  const shares = entry ? NEED_FIELDS.filter((name) => entry[name] !== '' && entry[name] != null)
+    .map((name) => `${t('goods.need_field.' + name)} ${entry[name]}`) : [];
   const changes = prestige.filter((p) => p.mine).length;
   return h('div', { class: 'law-group' + (open ? ' open' : '') },
     h('button', { class: 'law-group-head', onclick: filtering ? null : toggle, title: row.key },
       thumb(good.texture, 128, 'law-group-icon'),
       h('span', { class: 'law-group-text' },
-        h('span', { class: 'law-group-name' }, goodRowName(row)),
-        h('span', { class: 'muted small' }, t('goods.price_short', { cost: good.cost_text || good.cost }))),
+        h('span', { class: 'law-group-name' }, goodRowName(row),
+          extra.isDefault && h('span', { class: 'goods-default', title: t('goods.need_default') }, ' ★')),
+        h('span', { class: 'muted small' }, t('goods.price_short', { cost: good.cost_text || good.cost })),
+        shares.length > 0 && h('span', { class: 'muted small' }, shares.join(' · '))),
       row.mine && h('span', { class: 'badge accent' }, row.mine.mode === 'override' ? t('law.modified') : t('law.added')),
       changes > 0 && h('span', { class: 'badge accent', title: t('goods.prestige_changed_hint') },
         t('law.changed', { count: changes })),

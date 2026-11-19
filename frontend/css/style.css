@@ -451,6 +451,11 @@ select.input { padding-right: 4px; }
 
 /* goods: the game's four market columns */
 .goods-columns { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.goods-views { flex: none; }
+.goods-need-stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.goods-default { color: var(--accent); }
+.goods-no-need { grid-column: 1 / -1; }
+.goods-no-need-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 14px; align-items: start; }
 .goods-card-actions { gap: 6px; margin: 2px 0 4px; flex-wrap: wrap; }
 .goods-swatch { display: inline-block; width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line);
   background: repeating-linear-gradient(45deg, var(--panel-2) 0 4px, var(--panel-3) 4px 8px); }
@@ -919,7 +924,7 @@ img.broken { visibility: hidden; }
   .builder, .builder.sidebar-collapsed, .builder.law-board-mode, .builder.law-edit,
   .builder.country-world-mode, .builder.country-edit { grid-template-columns: 1fr; height: auto; }
   .country-grid { grid-template-columns: 1fr; }
-  .law-columns, .goods-columns { grid-template-columns: 1fr; }
+  .law-columns, .goods-columns, .goods-no-need-grid { grid-template-columns: 1fr; }
   .side-strip { flex-direction: row; padding: 10px 14px; }
   .side-strip-title { writing-mode: horizontal-tb; letter-spacing: 0; }
   .col { overflow: visible; }

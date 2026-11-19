@@ -1980,6 +1980,7 @@ class InterfaceTextTest(unittest.TestCase):
         "goods.flag.": ["tradeable", "local", "fixed_price", "pop_consumption_can_add_infrastructure"],
         "goods.flag_hint.": ["tradeable", "local", "fixed_price", "pop_consumption_can_add_infrastructure"],
         "goods.need_field.": ["weight", "max_supply_share", "min_supply_share"],
+        "goods.view.": ["category", "needs"],
         "gdproblem.": ["key_missing", "key_invalid", "key_exists", "icon_missing", "cost", "category", "number", "need",
                        "need_value"],
         "pgproblem.": ["key_missing", "key_invalid", "key_exists", "base_good", "icon_missing", "prestige_bonus"],
