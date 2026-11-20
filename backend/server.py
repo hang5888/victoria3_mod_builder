@@ -359,6 +359,8 @@ def api_post(app, path, body):
             return proj
     if path == "/api/project/good":
         return save_good(app, body)
+    if path == "/api/project/goods":
+        return save_goods(app, body)
     if path == "/api/project/good/delete":
         # a new good goes with the mod's prestige goods of it
         with app.lock:
@@ -541,36 +543,67 @@ def rename_good(proj, old, new):
             good["base_good"] = new
 
 
-def save_good(app, body):
-    """Add or update one good in the current project and regenerate the mod files."""
-    if not isinstance(body.get("good"), dict):
+def _clean_good(raw):
+    if not isinstance(raw, dict):
         raise ApiError("bad_request")
     try:
-        clean = normalize_good(body["good"])
+        return normalize_good(raw)
     except (ValueError, TypeError, AttributeError):
         raise ApiError("bad_request")
+
+
+def _put_good(data, proj, clean, original_key):
+    """Check one good and put it in the project (in place of `original_key`); its problems when it is not put."""
+    others = [good for good in proj["goods"] if good["key"] != original_key]
+    categories = set(GOODS_CATEGORIES) | {good["category"] for good in data.goods.values()}
+    game = {"goods": set(data.goods), "needs": set(data.pop_needs), "categories": categories}
+    errors = validate_good(clean, game, others)
+    if errors:
+        return errors
+    if clean["mode"] == "override" and clean["key"] in data.goods:
+        # only what changed is written: the definition, the colour (the needs are compared when writing)
+        clean["definition"] = not same_definition(clean, data.goods[clean["key"]])
+        clean["recolor"] = clean["color"] is not None and clean["color"] != data.goods_colors.get(clean["key"])
+    index = next((i for i, good in enumerate(proj["goods"]) if good["key"] == original_key), None)
+    if index is None:
+        proj["goods"].append(clean)
+    else:
+        proj["goods"][index] = clean
+        if clean["mode"] == "new" and original_key != clean["key"]:
+            rename_good(proj, original_key, clean["key"])
+    return []
+
+
+def save_good(app, body):
+    """Add or update one good in the current project and regenerate the mod files."""
+    clean = _clean_good(body.get("good"))
     original_key = body.get("original_key") or clean["key"]
     with app.lock:
         data = app.require_data()
         path = app.require_project()
         proj = project.load_project(path)
-        others = [good for good in proj["goods"] if good["key"] != original_key]
-        categories = set(GOODS_CATEGORIES) | {good["category"] for good in data.goods.values()}
-        game = {"goods": set(data.goods), "needs": set(data.pop_needs), "categories": categories}
-        errors = validate_good(clean, game, others)
+        errors = _put_good(data, proj, clean, original_key)
         if errors:
             return {"errors": errors}
-        if clean["mode"] == "override" and clean["key"] in data.goods:
-            # only what changed is written: the definition, the colour (the needs are compared when writing)
-            clean["definition"] = not same_definition(clean, data.goods[clean["key"]])
-            clean["recolor"] = clean["color"] is not None and clean["color"] != data.goods_colors.get(clean["key"])
-        index = next((i for i, good in enumerate(proj["goods"]) if good["key"] == original_key), None)
-        if index is None:
-            proj["goods"].append(clean)
-        else:
-            proj["goods"][index] = clean
-            if clean["mode"] == "new" and original_key != clean["key"]:
-                rename_good(proj, original_key, clean["key"])
+        generated = app.save_project(path, proj, body)
+        return {"errors": [], "project": proj, "generated": generated, "dir": path}
+
+
+def save_goods(app, body):
+    """Add or update several goods at once (the changes made on the goods board: needs, weights, categories),
+    each under its own key, and regenerate the mod files once. Nothing is saved when one of them has problems."""
+    raw = body.get("goods")
+    if not isinstance(raw, list) or not raw:
+        raise ApiError("bad_request")
+    goods = [_clean_good(good) for good in raw]
+    with app.lock:
+        data = app.require_data()
+        path = app.require_project()
+        proj = project.load_project(path)
+        for clean in goods:
+            errors = _put_good(data, proj, clean, clean["key"])
+            if errors:
+                return {"errors": errors, "key": clean["key"]}
         generated = app.save_project(path, proj, body)
         return {"errors": [], "project": proj, "generated": generated, "dir": path}
 

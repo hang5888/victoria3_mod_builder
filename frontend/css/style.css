@@ -454,7 +454,33 @@ select.input { padding-right: 4px; }
 .goods-views { flex: none; }
 .goods-default { color: var(--accent); }
 .goods-need-block { grid-column: 1 / -1; }
-.goods-need-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 14px; align-items: start; }
+.builder.law-board-mode.goods-pool-mode { grid-template-columns: minmax(210px, 250px) minmax(0, 1fr) minmax(260px, 320px); }
+.builder.law-board-mode.goods-pool-mode.sidebar-collapsed { grid-template-columns: 40px minmax(0, 1fr) minmax(260px, 320px); }
+.goods-pool { background: var(--bg); }
+.goods-pool-list { display: flex; flex-direction: column; gap: 8px; }
+.goods-board-card { position: relative; overflow: visible; }
+.goods-board-card > .law-group-head { border-radius: calc(var(--radius) - 1px); }
+.goods-board-card.dragging { opacity: 0.4; }
+.goods-board-card[draggable="true"] > .law-group-head { cursor: grab; }
+.goods-pop { position: absolute; top: calc(100% + 4px); left: 0; right: 0; min-width: 280px; max-height: 60vh; overflow-y: auto;
+  z-index: 40; background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55); }
+.goods-pool .goods-pop { left: auto; }
+.drop-target { outline: 2px dashed var(--accent); outline-offset: 3px; border-radius: var(--radius); }
+.goods-pending { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.goods-pending[hidden] { display: none; }
+.goods-pending > span { flex: 1; }
+.goods-shares { align-self: flex-start; max-width: 100%; padding: 0; border: 0; background: none; color: var(--muted);
+  font: inherit; font-size: 12px; text-align: left; cursor: text; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.goods-board-card.unsaved { border-color: var(--warn); }
+.goods-unsaved { flex: none; color: var(--warn); font-size: 11px; }
+.goods-shares:hover { color: var(--text); text-decoration: underline dotted; }
+.goods-quick { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 2px; font-size: 12px; color: var(--muted); cursor: default; }
+.goods-quick label { display: flex; align-items: center; gap: 3px; }
+.goods-quick .input { width: 46px; min-width: 0; padding: 2px 4px; font-size: 12px; }
+.goods-board-card.typing .law-group-head > .badge, .goods-board-card.typing .side-caret { display: none; }
+.goods-quick .input.invalid { border-color: var(--bad); }
+.goods-need-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px 14px; align-items: start; }
 .goods-card-actions { gap: 6px; margin: 2px 0 4px; flex-wrap: wrap; }
 .goods-swatch { display: inline-block; width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line);
   background: repeating-linear-gradient(45deg, var(--panel-2) 0 4px, var(--panel-3) 4px 8px); }
@@ -920,7 +946,7 @@ img.broken { visibility: hidden; }
 
 @media (max-width: 1240px) {
   .view-company, .view-factory, .view-monument, .view-law, .view-goods, .view-country { overflow: auto; }
-  .builder, .builder.sidebar-collapsed, .builder.law-board-mode, .builder.law-edit,
+  .builder, .builder.sidebar-collapsed, .builder.law-board-mode, .builder.law-edit, .builder.law-board-mode.goods-pool-mode,
   .builder.country-world-mode, .builder.country-edit { grid-template-columns: 1fr; height: auto; }
   .country-grid { grid-template-columns: 1fr; }
   .law-columns, .goods-columns, .goods-need-grid { grid-template-columns: 1fr; }

@@ -1,6 +1,8 @@
 // Goods builder. The start screen is the game's market: four columns (staple, industrial, luxury,
-// military) of goods that unfold into their prestige goods, or the same goods sorted by the pop needs
-// they fill. A good or prestige good opens in the
+// military) of goods, or the same goods sorted by the pop needs they fill (with the goods in no need on the
+// right). A good's card opens a menu over the board with its prestige goods. On the board goods are dragged
+// to another category or need, and their weights typed in place; those changes are kept in `pending` until
+// "save changes" writes them all at once. A good or prestige good opens in the
 // editor: preview on the left, editor in the middle, ✕ back to the board.
 import { api, textureUrl } from './api.js';
 import { t } from './i18n.js';
@@ -36,7 +38,10 @@ let pristine = true;         // nothing changed since it was opened (switching v
 let versionSource = null;    // the source whose version an overridden item was started from
 let autoColor = false;       // the colour of a new good follows its icon until it is set by hand
 let usesCache = null;        // key -> {producers, consumers}, for the preview
-const expanded = new Set();  // goods unfolded on the board (`need:key` in the needs view)
+const pending = new Map();   // key -> whole good model changed on the board and not saved yet
+let popover = null;          // id of the board card whose menu is open (`need:key` in the needs view)
+let quick = null;            // id of the card whose weight and shares are being typed
+let dragging = null;         // {key, need, category} of the card being dragged
 const filters = { query: '', source: '' };
 const VIEW_KEY = 'vmb.goods.view';
 let view = readView();       // how the board is sorted: 'category' or 'needs'
@@ -51,18 +56,33 @@ function readView() {
 
 function setView(name) {
   view = name;
+  popover = null;
+  quick = null;
   try {
     localStorage.setItem(VIEW_KEY, name);
   } catch {
     // the board still switches, it is only not remembered
   }
-  renderBoard();
+  renderPage();
 }
 const els = {};
 const sections = {};
 
 window.addEventListener('beforeunload', (event) => {
-  if (dirty) event.preventDefault();
+  if (dirty || pending.size) event.preventDefault();
+});
+
+// A click outside the open menu closes it (a click on a card's head toggles menus itself).
+document.addEventListener('mousedown', (event) => {
+  if (popover === null || !els.board || !els.board.isConnected) return;
+  if (event.target.closest('.goods-pop, .law-group-head')) return;
+  popover = null;
+  renderColumns();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || popover === null || !els.board || !els.board.isConnected) return;
+  popover = null;
+  renderColumns();
 });
 
 function blankGood(category, need = '') {
@@ -112,6 +132,8 @@ export async function renderGoods(container) {
     editing = null;  // the board
     originalKey = null;
     dirty = false;
+    pending.clear();
+    popover = null;
     editingProject = store.state.project.dir;
   }
   els.sidebar = h('aside', { class: 'col col-sidebar' });
@@ -138,8 +160,13 @@ function renderPage() {
     renderMiddle();
   } else {
     els.board = h('div', { class: 'col law-board' });
-    els.builder.className = 'builder law-board-mode';
-    els.builder.replaceChildren(els.sidebar, els.board);
+    // the needs view has the goods in no need on the right; a good dropped there leaves its need
+    els.pool = view === 'needs'
+      ? dropZone(h('aside', { class: 'col col-right goods-pool' }), (item) => Boolean(item.need),
+        (item) => moveToNeed(item.key, item.need, null, false))
+      : null;
+    els.builder.className = 'builder law-board-mode' + (els.pool ? ' goods-pool-mode' : '');
+    els.builder.replaceChildren(els.sidebar, els.board, ...(els.pool ? [els.pool] : []));
     renderBoard();
   }
   refreshSidebar();
@@ -155,9 +182,12 @@ const gamePrestige = (key) => store.data.gamePrestigeGoods.find((good) => good.k
 // Every good: the game's (or the mod's version of them), then the mod's new ones.
 function goodRows() {
   const mine = new Map(projectGoods().map((good) => [good.key, good]));
-  const rows = store.data.gameGoods.map((game) => ({ key: game.key, game, mine: mine.get(game.key) || null }));
+  const rows = store.data.gameGoods.map((game) => ({ key: game.key, game,
+    mine: pending.get(game.key) || mine.get(game.key) || null }));
   for (const good of projectGoods()) {
-    if (good.mode === 'new' || !gameGood(good.key)) rows.push({ key: good.key, game: null, mine: good });
+    if (good.mode === 'new' || !gameGood(good.key)) {
+      rows.push({ key: good.key, game: null, mine: pending.get(good.key) || good });
+    }
   }
   return rows;
 }
@@ -352,6 +382,7 @@ const overrideOf = (game) => ({ ...game, texture: game.texture, cost: game.cost_
 
 function openGood(row) {
   versionSource = null;
+  if (pending.has(row.key)) return takeChange(row.key);
   if (row.mine) return editGood(row.mine, row.mine.key);
   return editGood(overrideOf(row.game), null, true);
 }
@@ -360,6 +391,14 @@ function openPrestige(row) {
   versionSource = null;
   if (row.mine) return editPrestige(row.mine, row.mine.key);
   return editPrestige({ ...row.game, mode: 'override', names: {} }, null, true);
+}
+
+// A good changed on the board opens in the editor as changed, and its change leaves the board's.
+async function takeChange(key) {
+  const saved = projectGoods().find((good) => good.key === key);
+  const opened = await editGood(pending.get(key), saved ? saved.key : null, true);
+  if (opened) pending.delete(key);
+  return opened;
 }
 
 function freeKey(base, kind) {
@@ -421,6 +460,7 @@ async function remove(item, kind) {
   if (!(await confirmDialog(text, t('company.delete')))) return;
   const url = kind === 'good' ? '/api/project/good/delete' : '/api/project/prestige_good/delete';
   setProject(await api.post(url, { key: item.key, keep_images: keptImages(current ? 'goods' : null) }));
+  if (kind === 'good') pending.delete(item.key);
   usesCache = null;
   // a prestige good of a new good that is gone has nothing to be made of
   const lost = editing && (current || (kind === 'good' && item.mode === 'new' && editingKind === 'prestige'
@@ -451,7 +491,10 @@ const sidebarEditor = {
   kind: 'good',
   handles: (kind) => kind === 'good' || kind === 'prestige_good',
   state: () => ({ key: originalKey, dirty, kind: editingKind === 'prestige' ? 'prestige_good' : 'good' }),
-  open: (item, kind) => (kind === 'prestige_good' ? editPrestige(item, item.key) : editGood(item, item.key)),
+  open: (item, kind) => {
+    if (kind === 'prestige_good') return editPrestige(item, item.key);
+    return pending.has(item.key) ? takeChange(item.key) : editGood(item, item.key);
+  },
   remove: (item, kind) => remove(item, kind === 'prestige_good' ? 'prestige' : 'good'),
 };
 
@@ -489,18 +532,157 @@ function renderBoard() {
     class: 'input', type: 'search', placeholder: t('goods.search'), value: filters.query,
     oninput: debounce(() => { filters.query = search.value; renderColumns(); }, 150),
   });
-  els.columns = h('div', { class: 'law-columns goods-columns' });
+  els.columns = h('div', { class: 'law-columns goods-columns' + (view === 'needs' ? ' goods-needs' : '') });
+  els.pendingBar = h('div', { class: 'notice warn goods-pending' });
   fill(els.board,
     h('div', { class: 'col-head' }, h('h2', {}, t('goods.title')),
       h('span', { class: 'muted' }, t('goods.count', { count: data.gameGoods.length, prestige: data.gamePrestigeGoods.length }))),
     h('div', { class: 'tabs goods-views' }, ['category', 'needs'].map((name) => h('button', {
-      class: 'tab' + (name === view ? ' active' : ''), onclick: () => setView(name),
+      class: 'tab' + (name === view ? ' active' : ''), onclick: () => run(() => setView(name)),
     }, t('goods.view.' + name)))),
     h('div', { class: 'law-filters' }, search, select),
     h('p', { class: 'muted small' }, view === 'needs' ? t('goods.board_hint_needs') : t('goods.board_hint')),
+    els.pendingBar,
     els.columns);
+  renderPendingBar();
   renderColumns();
 }
+
+// "N goods changed": save them all, or drop them.
+function renderPendingBar() {
+  els.pendingBar.hidden = !pending.size;
+  fill(els.pendingBar,
+    h('span', {}, t('goods.pending', { count: pending.size })),
+    h('button', { class: 'btn small primary', onclick: () => run(savePending) }, t('goods.save_pending')),
+    h('button', { class: 'btn small', onclick: () => run(discardPending) }, t('goods.discard_pending_button')));
+}
+
+async function savePending() {
+  const goods = [...pending.values()];
+  const result = await api.post('/api/project/goods', { goods, keep_images: keptImages() });
+  if (result.errors.length) {
+    const good = goods.find((item) => item.key === result.key);
+    const texts = result.errors.map((code) =>
+      (code.startsWith('braces:') ? t('problem.braces', { name: code.slice(7) }) : t('gdproblem.' + code)));
+    toast(`${good ? goodName(good) || good.key : result.key}: ${texts.join(' ')}`, 'error');
+    return;
+  }
+  pending.clear();
+  setProject(result.project);
+  usesCache = null;
+  renderBoard();
+  refreshSidebar();
+  toast(t('company.saved', { dir: result.dir }));
+}
+
+async function discardPending() {
+  if (!(await confirmDialog(t('goods.discard_pending', { count: pending.size }), t('company.discard')))) return;
+  pending.clear();
+  quick = null;
+  renderBoard();
+}
+
+// The board's model of a good, made on its first change: whole, as it would be saved (a game's good becomes
+// an override, which writes only what differs from the game).
+function changeOf(row) {
+  if (!pending.has(row.key)) pending.set(row.key, goodModel(row.mine || overrideOf(row.game)));
+  return pending.get(row.key);
+}
+
+// A change that brings a good back to how it is saved is no change.
+function settle(key) {
+  const saved = projectGoods().find((good) => good.key === key);
+  const game = gameGood(key);
+  const base = saved ? goodModel(saved) : game ? goodModel(overrideOf(game)) : null;
+  const plain = (good) => JSON.stringify({ ...good, needs: good.needs.map((row) =>
+    [row.need, ...NEED_FIELDS.map((name) => String(row[name] ?? ''))]).sort() });
+  if (base && plain(base) === plain(pending.get(key))) pending.delete(key);
+}
+
+function boardChanged(key) {
+  settle(key);
+  renderPendingBar();
+  renderColumns();
+}
+
+const rowOf = (key) => goodRows().find((row) => row.key === key);
+
+// Move a good from one need to another (`copy` keeps it in the first). No `from`: it is added (weight 1);
+// no `to`: it leaves `from`. A need's default good stays in it.
+function moveToNeed(key, from, to, copy) {
+  const row = rowOf(key);
+  if (!row || from === to) return;
+  const need = from ? store.data.pop_needs.find((item) => item.key === from) : null;
+  const leaves = from && (!copy || !to);
+  if (leaves && need && need.default === key) {
+    toast(t('goods.default_stays', { good: goodRowName(row), need: needName(from) }), 'error');
+    return;
+  }
+  const model = changeOf(row);
+  const entry = from && model.needs.find((item) => item.need === from);
+  if (to && !model.needs.some((item) => item.need === to)) {
+    model.needs.push(entry ? { ...entry, need: to }
+      : { need: to, weight: '1', ...Object.fromEntries(NEED_FIELDS.slice(1).map((name) => [name, ''])) });
+  }
+  if (leaves) model.needs = model.needs.filter((item) => item.need !== from);
+  boardChanged(key);
+}
+
+function setCategory(key, category) {
+  const row = rowOf(key);
+  if (!row || rowItem(row).category === category) return;
+  changeOf(row).category = category;
+  boardChanged(key);
+}
+
+function setShares(key, needKey, values) {
+  const row = rowOf(key);
+  const entry = row && needsOfRow(row).find((item) => item.need === needKey);
+  if (!entry || NEED_FIELDS.every((name) => String(entry[name] ?? '') === values[name])) return;
+  Object.assign(changeOf(row).needs.find((item) => item.need === needKey), values);
+  boardChanged(key);
+}
+
+// ------------------------------------------------------------ dragging
+
+function dragSource(element, item) {
+  element.draggable = true;
+  element.addEventListener('dragstart', (event) => {
+    dragging = item;
+    event.dataTransfer.effectAllowed = 'copyMove';
+    event.dataTransfer.setData('text/plain', item.key);
+    element.classList.add('dragging');
+  });
+  element.addEventListener('dragend', () => {
+    dragging = null;
+    element.classList.remove('dragging');
+    for (const zone of document.querySelectorAll('.drop-target')) zone.classList.remove('drop-target');
+  });
+  return element;
+}
+
+// A place goods are dropped on: `accepts(item)` for the ones it takes, `drop(item, copy)` when one is dropped.
+function dropZone(element, accepts, drop, copies = false) {
+  element.addEventListener('dragover', (event) => {
+    if (!dragging || !accepts(dragging)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = copies && event.ctrlKey ? 'copy' : 'move';
+    element.classList.add('drop-target');
+  });
+  element.addEventListener('dragleave', (event) => {
+    if (!element.contains(event.relatedTarget)) element.classList.remove('drop-target');
+  });
+  element.addEventListener('drop', (event) => {
+    event.preventDefault();
+    element.classList.remove('drop-target');
+    const item = dragging;
+    dragging = null;
+    if (item && accepts(item)) drop(item, copies && event.ctrlKey);
+  });
+  return element;
+}
+
+// ---------------------------------------------------------------- cards
 
 function renderColumns() {
   if (view === 'needs') renderNeedColumns();
@@ -519,7 +701,7 @@ function shownCard(row, filtering, extra) {
   return goodCard(row, prestige, shown, filtering, extra);
 }
 
-// The needs a good is in now: the mod's for a good it has, the game's for the others.
+// The needs a good is in now: the board's change, the mod's or the game's.
 const needsOfRow = (row) => (row.mine ? row.mine.needs || [] : gameNeedsOf(row.key));
 
 // Where a good is in a list of the game's order; the ones not in it go last.
@@ -528,8 +710,8 @@ function rank(order, key) {
   return index < 0 ? order.length : index;
 }
 
-// The board by pop needs: each need a row across the board, its goods (in the game's order, then the mod's)
-// in four columns; the goods in no need in a last row the same way.
+// The board by pop needs: each need a row across the board, its goods (in the game's order, then the others)
+// in four columns; the goods in no need in the column on the right.
 function renderNeedColumns() {
   const filtering = Boolean(filters.query.trim() || filters.source);
   const placed = goodRows().map((row) => ({ row, needs: needsOfRow(row) }));
@@ -539,23 +721,28 @@ function renderNeedColumns() {
       .sort((a, b) => rank(order, a.row.key) - rank(order, b.row.key));
     const cards = members.map(({ row, needs }) => shownCard(row, filtering, {
       id: need.key + ':' + row.key,
+      needKey: need.key,
       need: needs.find((entry) => entry.need === need.key),
       isDefault: need.default === row.key,
     })).filter(Boolean);
-    return { title: need.name || need.key, hint: need.key, cards, add: () => newGood('staple', need.key) };
+    return { need, cards };
   });
-  blocks.push({ title: t('goods.no_need'), hint: '', add: () => newGood('industrial'),
-    cards: placed.filter((item) => !item.needs.length)
-      .map(({ row }) => shownCard(row, filtering, { id: 'none:' + row.key })).filter(Boolean) });
   const shown = filtering ? blocks.filter((block) => block.cards.length) : blocks;
-  if (!shown.length) {
-    fill(els.columns, h('p', { class: 'muted small' }, t('goods.no_match')));
-    return;
+  fill(els.columns, shown.length ? shown.map(({ need, cards }) => dropZone(
+    h('section', { class: 'law-column goods-need-block' },
+      h('h3', { class: 'law-column-title', title: need.key }, need.name || need.key),
+      cards.length ? h('div', { class: 'goods-need-grid' }, cards) : h('p', { class: 'muted small' }, t('goods.no_goods'))),
+    (item) => item.need !== need.key && item.category === undefined,
+    (item, copy) => moveToNeed(item.key, item.need, need.key, copy), true))
+    : h('p', { class: 'muted small' }, t('goods.no_match')));
+  const none = placed.filter((item) => !item.needs.length)
+    .map(({ row }) => shownCard(row, filtering, { id: 'none:' + row.key, pool: true })).filter(Boolean);
+  if (els.pool) {
+    fill(els.pool,
+      h('div', { class: 'col-head' }, h('h2', {}, t('goods.no_need')), h('span', { class: 'muted' }, String(none.length))),
+      h('p', { class: 'muted small' }, t('goods.pool_hint')),
+      h('div', { class: 'goods-pool-list' }, none.length ? none : h('p', { class: 'muted small' }, t('goods.no_match'))));
   }
-  fill(els.columns, shown.map((block) => h('section', { class: 'law-column goods-need-block' },
-    h('h3', { class: 'law-column-title', title: block.hint }, block.title),
-    block.cards.length ? h('div', { class: 'goods-need-grid' }, block.cards) : h('p', { class: 'muted small' }, t('goods.no_goods')),
-    !filtering && h('button', { class: 'btn law-add', onclick: () => run(block.add) }, `＋ ${t('goods.new')}`))));
 }
 
 function renderCategoryColumns() {
@@ -565,54 +752,131 @@ function renderCategoryColumns() {
   for (const row of rows) if (!categories.includes(rowItem(row).category)) categories.push(rowItem(row).category);
   fill(els.columns, categories.map((category) => {
     const cards = rows.filter((row) => rowItem(row).category === category)
-      .map((row) => shownCard(row, filtering)).filter(Boolean);
-    return h('section', { class: 'law-column' },
+      .map((row) => shownCard(row, filtering, { category })).filter(Boolean);
+    return dropZone(h('section', { class: 'law-column' },
       h('h3', { class: 'law-column-title' }, categoryName(category)),
       cards.length ? cards : h('p', { class: 'muted small' }, t('goods.no_match')),
-      !filtering && h('button', { class: 'btn law-add', onclick: () => run(() => newGood(category)) }, `＋ ${t('goods.new')}`));
+      !filtering && h('button', { class: 'btn law-add', onclick: () => run(() => newGood(category)) }, `＋ ${t('goods.new')}`)),
+    (item) => item.category !== undefined && item.category !== category,
+    (item) => setCategory(item.key, category));
   }));
 }
 
-// A good on the board. In the needs view `extra` tells which card it is (a good can be in two needs),
-// its entry in that need and whether it is the need's default good: a card in a need shows its weight and
-// shares where the others show the price (the price is then in the tooltip).
+// A good on the board. `extra` tells which card it is (`id`; a good can be in two needs) and where: its
+// category in the category view; in the needs view its need (`needKey`), its entry there (`need`) and whether
+// it is the need's default good, or `pool` for the goods in no need. A card in a need shows its weight and
+// shares where the others show the price (the price is then in the tooltip); a click on them types them.
 function goodCard(row, prestige, shown, filtering, extra = {}) {
   const good = rowItem(row);
   const id = extra.id || row.key;
-  const open = filtering || expanded.has(id);
+  const open = popover === id;
   const toggle = () => {
-    if (expanded.has(id)) expanded.delete(id);
-    else expanded.add(id);
+    popover = open ? null : id;
+    quick = null;
     renderColumns();
   };
   const entry = extra.need;
-  const shares = entry ? NEED_FIELDS.filter((name) => entry[name] !== '' && entry[name] != null)
-    .map((name) => `${t('goods.need_short.' + name)} ${entry[name]}`) : [];
   const price = t('goods.price_short', { cost: good.cost_text || good.cost });
   const changes = prestige.filter((p) => p.mine).length;
-  return h('div', { class: 'law-group' + (open ? ' open' : '') },
-    h('button', { class: 'law-group-head', onclick: filtering ? null : toggle, title: row.key },
+  const query = filters.query.trim();
+  const matched = query && shown.length ? shown.map(prestigeRowName) : [];
+  const typing = quick === id && entry;
+  const card = h('div', { class: 'law-group goods-board-card' + (open ? ' open' : '') + (pending.has(row.key) ? ' unsaved' : '') + (typing ? ' typing' : '') },
+    h('div', {
+      class: 'law-group-head', role: 'button', tabindex: '0', title: row.key, onclick: toggle,
+      onkeydown: (event) => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          toggle();
+        }
+      },
+    },
       thumb(good.texture, 128, 'law-group-icon'),
       h('span', { class: 'law-group-text', title: entry ? price : null },
         h('span', { class: 'law-group-name' }, goodRowName(row),
           extra.isDefault && h('span', { class: 'goods-default', title: t('goods.need_default') }, ' ★')),
-        entry ? shares.length > 0 && h('span', { class: 'muted small' }, shares.join(' · '))
-          : h('span', { class: 'muted small' }, price)),
+        entry ? (typing ? quickEditor(row, extra.needKey, entry) : sharesButton(id, entry))
+          : h('span', { class: 'muted small' }, price),
+        matched.length > 0 && h('span', { class: 'muted small goods-matched' },
+          t('goods.prestige_matches', { names: matched.join('、') }))),
+      pending.has(row.key) && h('span', { class: 'goods-unsaved', title: t('goods.unsaved') }, '●'),
       row.mine && h('span', { class: 'badge accent' }, row.mine.mode === 'override' ? t('law.modified') : t('law.added')),
       changes > 0 && h('span', { class: 'badge accent', title: t('goods.prestige_changed_hint') },
         t('law.changed', { count: changes })),
       prestige.length > 0 && h('span', { class: 'badge', title: t('goods.prestige_count_hint') }, String(prestige.length)),
-      !filtering && h('span', { class: 'side-caret' }, open ? '▾' : '▸')),
-    open && h('div', { class: 'law-list' },
+      h('span', { class: 'side-caret' }, open ? '▾' : '▸')),
+    open && h('div', { class: 'law-list goods-pop' },
       h('div', { class: 'row goods-card-actions' },
         h('button', { class: 'btn small', onclick: () => run(() => openGood(row)) },
           row.mine && row.mine.mode === 'new' ? t('goods.edit') : t('goods.modify')),
         h('button', { class: 'btn small', title: t('goods.copy_hint'), onclick: () => run(() => copyGood(row)) }, t('law.copy')),
         row.game && sourceBadges(row.game)),
       h('div', { class: 'muted small' }, t('goods.prestige_title')),
-      shown.map((p) => prestigeRow(p, Boolean(filters.query.trim()))),
+      shown.map((p) => prestigeRow(p, Boolean(query))),
       !shown.length && h('p', { class: 'muted small' }, t('goods.no_prestige')),
       h('button', { class: 'btn law-add', onclick: () => run(() => newPrestige(row.key)) }, `＋ ${t('pgood.new')}`)));
+  if (typing) return card;
+  return dragSource(card, extra.category !== undefined ? { key: row.key, category: extra.category }
+    : { key: row.key, need: extra.needKey || null });
+}
+
+// The weight and shares of a good in a need, as a line that turns into inputs when clicked.
+function sharesButton(id, entry) {
+  const parts = NEED_FIELDS.filter((name) => entry[name] !== '' && entry[name] != null)
+    .map((name) => `${t('goods.need_short.' + name)} ${entry[name]}`);
+  return h('button', {
+    class: 'goods-shares', title: t('goods.quick_hint'),
+    onclick: (event) => {
+      event.stopPropagation();
+      quick = id;
+      popover = null;
+      renderColumns();
+    },
+  }, parts.length ? parts.join(' · ') : `${t('goods.need_short.weight')} —`);
+}
+
+// Inputs for the weight and shares: Enter or leaving them keeps the values (when they are numbers),
+// Escape drops them.
+function quickEditor(row, needKey, entry) {
+  const id = quick;
+  const inputs = Object.fromEntries(NEED_FIELDS.map((name) => [name, h('input', {
+    class: 'input', value: entry[name] ?? '', placeholder: '—', inputmode: 'decimal',
+    oninput: (event) => event.target.classList.toggle('invalid',
+      Boolean(event.target.value.trim()) && !NUMBER_PATTERN.test(event.target.value.trim())),
+  })]));
+  const commit = () => {
+    if (quick !== id) return;
+    const values = Object.fromEntries(NEED_FIELDS.map((name) => [name, inputs[name].value.trim()]));
+    const bad = NEED_FIELDS.find((name) => values[name] && !NUMBER_PATTERN.test(values[name]));
+    if (bad) {
+      inputs[bad].classList.add('invalid');
+      toast(t('gdproblem.need_value'), 'error');
+      inputs[bad].focus();
+      return;
+    }
+    quick = null;
+    setShares(row.key, needKey, values);
+    renderColumns();
+  };
+  const box = h('span', {
+    class: 'goods-quick',
+    onclick: (event) => event.stopPropagation(),
+    onkeydown: (event) => {
+      event.stopPropagation();
+      if (event.key === 'Enter') commit();
+      if (event.key === 'Escape') {
+        quick = null;
+        renderColumns();
+      }
+    },
+    onfocusout: (event) => {
+      if (!box.contains(event.relatedTarget)) commit();
+    },
+  }, NEED_FIELDS.map((name) => h('label', {}, t('goods.need_short.' + name), inputs[name])));
+  requestAnimationFrame(() => {
+    if (inputs.weight.isConnected) inputs.weight.select();
+  });
+  return box;
 }
 
 function prestigeRow(row, highlight) {
