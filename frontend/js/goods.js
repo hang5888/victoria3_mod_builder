@@ -79,6 +79,10 @@ document.addEventListener('mousedown', (event) => {
   popover = null;
   renderColumns();
 });
+document.addEventListener('scroll', (event) => {
+  if (popover !== null && !(event.target instanceof Element && event.target.closest('.goods-pop'))) placePopover();
+}, true);
+window.addEventListener('resize', () => placePopover());
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape' || popover === null || !els.board || !els.board.isConnected) return;
   popover = null;
@@ -687,6 +691,28 @@ function dropZone(element, accepts, drop, copies = false) {
 function renderColumns() {
   if (view === 'needs') renderNeedColumns();
   else renderCategoryColumns();
+  placePopover();
+}
+
+// The open menu is fixed on the screen (a column would cut it off): under its card, at least 320px wide and
+// inside the window, above the card when there is no room below. It follows the card when the board scrolls
+// and closes when the card scrolls out of its column.
+function placePopover() {
+  const pop = document.querySelector('.goods-pop');
+  if (!pop) return;
+  const card = pop.parentElement.getBoundingClientRect();
+  const column = pop.closest('.col').getBoundingClientRect();
+  if (card.bottom < column.top || card.top > column.bottom) {
+    popover = null;
+    renderColumns();
+    return;
+  }
+  const width = Math.min(Math.max(card.width, 320), window.innerWidth - 16);
+  pop.style.width = `${width}px`;
+  pop.style.left = `${Math.max(8, Math.min(card.left, window.innerWidth - width - 8))}px`;
+  const height = pop.offsetHeight;
+  const above = card.top - height - 4;
+  pop.style.top = `${card.bottom + 4 + height > window.innerHeight - 8 && above >= 8 ? above : card.bottom + 4}px`;
 }
 
 // The card of a good when the board is searched or filtered: null when neither it nor its prestige goods match.

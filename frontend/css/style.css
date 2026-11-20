@@ -462,10 +462,9 @@ select.input { padding-right: 4px; }
 .goods-board-card > .law-group-head { border-radius: calc(var(--radius) - 1px); }
 .goods-board-card.dragging { opacity: 0.4; }
 .goods-board-card[draggable="true"] > .law-group-head { cursor: grab; }
-.goods-pop { position: absolute; top: calc(100% + 4px); left: 0; right: 0; min-width: 280px; max-height: 60vh; overflow-y: auto;
+.goods-pop { position: fixed; max-height: 60vh; overflow-y: auto;
   z-index: 40; background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55); }
-.goods-pool .goods-pop { left: auto; }
 .drop-target { outline: 2px dashed var(--accent); outline-offset: 3px; border-radius: var(--radius); }
 .goods-pending { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .goods-pending[hidden] { display: none; }
