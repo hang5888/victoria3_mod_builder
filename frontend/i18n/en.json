@@ -282,7 +282,7 @@
   "factory.override_note": "This changes an existing building from \"{source}\". The original file is not touched; your mod replaces the whole definition when it loads after it.",
   "factory.key_hint": "Internal name used in the files. Letters, digits and _ only, usually starting with building_.",
   "factory.group": "Building group",
-  "factory.group_hint": "Decides what kind of building it is: industry, farm, ranch, plantation or resource extraction.",
+  "factory.group_hint": "What kind of building it is: industry, farm, ranch, plantation or resource extraction, or another kind such as infrastructure, government or military.",
   "fset.title": "Building settings",
   "fset.hint": "Common fields of the building. They are written in the other script below, and the two stay in step. Fields left unset use the game's default.",
   "fset.unreadable": "The { } in the other script do not match. Fix it below to use these settings again.",

@@ -37,6 +37,8 @@ const MODIFIER_VALUE_PATTERN = /^(-?\d+(\.\d+)?|yes|no)$/;
 const PMG_TEXTURE = 'gfx/interface/icons/generic_icons/mixed_icon_base.dds';
 const WONDER_TEXTURE = 'gfx/interface/icons/production_method_icons/wonders.dds';
 const MONUMENT_GROUPS = ['bg_monuments', 'bg_skyscraper'];
+// Not on the factory page either: the monuments the game keeps out of the build menu (Machu Picchu, Petra...).
+const HIDDEN_MONUMENT_GROUPS = ['bg_monuments_hidden'];
 const PAGE = 200;
 
 // What differs between the pages.
@@ -697,8 +699,9 @@ const nameLabel = () => t('company.name', { language: languageName(language()) }
 function basicSection() {
   const factory = editing;
   const original = factory.mode === 'override' ? store.index.factories.get(factory.key) : null;
+  // the monument page has the monument groups; the factory page every other group
   const options = store.data.building_groups.filter((g) => g.key === factory.building_group
-    || (isMonumentPage() ? MONUMENT_GROUPS.includes(g.key) : g.production));
+    || (isMonumentPage() ? MONUMENT_GROUPS.includes(g.key) : !isAnyMonumentGroup(g.key)));
   const group = h('select', {
     class: 'input',
     onchange: () => {
@@ -1245,8 +1248,12 @@ function hasUnknown(item, keys) {
 
 function settingsSection() {
   const monument = isMonumentPage();
+  // the warnings are about what a production building needs: the others (a university is run by the state)
+  // go without them
+  const fields = monument ? monumentSettingFields()
+    : isProduction(editing) ? BUILDING_SCRIPT_FIELDS : BUILDING_SCRIPT_FIELDS.map((field) => ({ ...field, risky: null }));
   return section(t('fset.title'), t('fset.hint'), scriptFields({
-    scope: monument ? 'monument' : 'building', fields: monument ? monumentSettingFields() : BUILDING_SCRIPT_FIELDS,
+    scope: monument ? 'monument' : 'building', fields,
     groups: monument ? MONUMENT_GROUPS_OF_FIELDS : BUILDING_GROUPS,
     get: () => editing.extra,
     write: (text, redraw) => {
@@ -1343,12 +1350,14 @@ function isProduction(factory) {
 }
 
 // Buildings of the monument page: monuments and skyscrapers.
-function isMonument(factory) {
-  return groupChain(factory.building_group).some((group) => MONUMENT_GROUPS.includes(group));
-}
+const isMonumentGroup = (group) => groupChain(group).some((key) => MONUMENT_GROUPS.includes(key));
+const isMonument = (factory) => isMonumentGroup(factory.building_group);
+const isAnyMonumentGroup = (group) => groupChain(group)
+  .some((key) => MONUMENT_GROUPS.includes(key) || HIDDEN_MONUMENT_GROUPS.includes(key));
 
-// The pages' buildings.
-const belongs = (factory) => (isMonumentPage() ? isMonument(factory) : isProduction(factory));
+// The pages' buildings: the monuments, and every building but monuments on the factory page (production
+// buildings, and also subsistence, infrastructure, government, military, power, services, urban facilities).
+const belongs = (factory) => (isMonumentPage() ? isMonument(factory) : !isAnyMonumentGroup(factory.building_group));
 
 function matchesFilters(factory) {
   const query = filters.query.trim().toLowerCase();
