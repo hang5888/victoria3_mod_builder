@@ -176,10 +176,41 @@ def normalize_good(raw):
     return good
 
 
+# The problems of a good's values in a need, by field ({} when they can be written): the weight is a number
+# above 0 (it may be left out only where the game leaves it out: `unweighted`), the supply shares are numbers
+# from 0 to 1 when given, and the min share is not above the max share.
+NEED_PROBLEMS = ("need_value", "need_weight", "need_share", "need_order")
+
+
+def need_row_problems(row, unweighted=False):
+    found = {}
+    value = {name: str(row.get(name) or "").strip() for name in NEED_FIELDS}
+    weight = value["weight"]
+    if not weight:
+        if not unweighted:
+            found["weight"] = "need_weight"
+    elif not NUMBER_PATTERN.match(weight):
+        found["weight"] = "need_value"
+    elif float(weight) <= 0:
+        found["weight"] = "need_weight"
+    for name in ("max_supply_share", "min_supply_share"):
+        if not value[name]:
+            continue
+        if not NUMBER_PATTERN.match(value[name]):
+            found[name] = "need_value"
+        elif not 0 <= float(value[name]) <= 1:
+            found[name] = "need_share"
+    if (not found.get("max_supply_share") and not found.get("min_supply_share") and value["max_supply_share"]
+            and value["min_supply_share"] and float(value["min_supply_share"]) > float(value["max_supply_share"])):
+        found["min_supply_share"] = "need_order"
+    return found
+
+
 def validate_good(good, game, others):
     """Error codes; empty means the good can be written.
 
-    `game`: {"goods": game good keys, "needs": pop need keys, "categories": known categories}.
+    `game`: {"goods": game good keys, "needs": pop need keys, "categories": known categories,
+    "unweighted": (need, good) pairs the game writes without a weight}.
     `others`: the other goods of the project.
     """
     errors = []
@@ -201,8 +232,9 @@ def validate_good(good, game, others):
     needs = [n["need"] for n in good["needs"]]
     if any(need not in game["needs"] for need in needs) or len(set(needs)) != len(needs):
         errors.append("need")
-    if any(n[name] and not NUMBER_PATTERN.match(n[name]) for n in good["needs"] for name in NEED_FIELDS):
-        errors.append("need_value")
+    unweighted = game.get("unweighted", set())
+    codes = {code for n in good["needs"] for code in need_row_problems(n, (n["need"], key) in unweighted).values()}
+    errors += [code for code in NEED_PROBLEMS if code in codes]
     if not braces_balanced(good["extra"]):
         errors.append("braces:extra")
     return errors

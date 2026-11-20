@@ -40,7 +40,7 @@ let autoColor = false;       // the colour of a new good follows its icon until 
 let usesCache = null;        // key -> {producers, consumers}, for the preview
 const pending = new Map();   // key -> whole good model changed on the board and not saved yet
 let popover = null;          // id of the board card whose menu is open (`need:key` in the needs view)
-let quick = null;            // id of the card whose weight and shares are being typed
+const typed = new Map();     // card id -> {key, need, values} typed on the board that are not valid yet
 let dragging = null;         // {key, need, category} of the card being dragged
 const filters = { query: '', source: '' };
 const VIEW_KEY = 'vmb.goods.view';
@@ -57,7 +57,6 @@ function readView() {
 function setView(name) {
   view = name;
   popover = null;
-  quick = null;
   try {
     localStorage.setItem(VIEW_KEY, name);
   } catch {
@@ -292,6 +291,38 @@ function rewrittenNeeds(good) {
     .map((entry) => entry.need);
 }
 
+// Whether the game writes a good's entry in a need without a weight (it may stay so).
+const unweighted = (need, key) => store.data.pop_needs.some((item) => item.key === need
+  && item.entries.some((entry) => entry.goods === key && !entry.weight));
+
+// The problems of a good's values in a need, by field (as `need_row_problems` of the backend): the weight is a
+// number above 0, the shares numbers from 0 to 1 when given, the min share not above the max share.
+const NEED_PROBLEMS = ['need_value', 'need_weight', 'need_share', 'need_order'];
+function needRowProblems(row, key) {
+  const found = {};
+  const value = Object.fromEntries(NEED_FIELDS.map((name) => [name, String(row[name] ?? '').trim()]));
+  if (!value.weight) {
+    if (!unweighted(row.need, key)) found.weight = 'need_weight';
+  } else if (!NUMBER_PATTERN.test(value.weight)) found.weight = 'need_value';
+  else if (Number(value.weight) <= 0) found.weight = 'need_weight';
+  for (const name of ['max_supply_share', 'min_supply_share']) {
+    if (!value[name]) continue;
+    if (!NUMBER_PATTERN.test(value[name])) found[name] = 'need_value';
+    else if (Number(value[name]) < 0 || Number(value[name]) > 1) found[name] = 'need_share';
+  }
+  if (!found.max_supply_share && !found.min_supply_share && value.max_supply_share && value.min_supply_share
+    && Number(value.min_supply_share) > Number(value.max_supply_share)) found.min_supply_share = 'need_order';
+  return found;
+}
+
+// Mark the inputs of a need's values: red with the reason as their tooltip.
+function markNeedInputs(inputs, problems) {
+  for (const name of NEED_FIELDS) {
+    inputs[name].classList.toggle('invalid', Boolean(problems[name]));
+    inputs[name].title = problems[name] ? t('gdproblem.' + problems[name]) : '';
+  }
+}
+
 // Same checks as the backend, so problems show up while typing.
 function goodProblems(good) {
   const found = [];
@@ -309,9 +340,8 @@ function goodProblems(good) {
   if (NUMBERS.some((name) => good[name] && !NUMBER_PATTERN.test(good[name]))) found.push('number');
   const needs = good.needs.map((row) => row.need);
   if (needs.some((need) => !store.index.pop_needs.has(need)) || new Set(needs).size !== needs.length) found.push('need');
-  if (good.needs.some((row) => NEED_FIELDS.some((name) => row[name] && !NUMBER_PATTERN.test(row[name])))) {
-    found.push('need_value');
-  }
+  const codes = new Set(good.needs.flatMap((row) => Object.values(needRowProblems(row, good.key))));
+  found.push(...NEED_PROBLEMS.filter((code) => codes.has(code)));
   if (!bracesBalanced(good.extra)) found.push('braces:extra');
   return found;
 }
@@ -554,14 +584,17 @@ function renderBoard() {
 
 // "N goods changed": save them all, or drop them.
 function renderPendingBar() {
-  els.pendingBar.hidden = !pending.size;
+  els.pendingBar.hidden = !pending.size && !typed.size;
   fill(els.pendingBar,
-    h('span', {}, t('goods.pending', { count: pending.size })),
-    h('button', { class: 'btn small primary', onclick: () => run(savePending) }, t('goods.save_pending')),
+    h('span', {}, [pending.size > 0 && t('goods.pending', { count: pending.size }),
+      typed.size > 0 && t('goods.typed_invalid')].filter(Boolean).join(' ')),
+    h('button', { class: 'btn small primary', disabled: typed.size > 0, title: typed.size ? t('goods.typed_invalid') : null,
+      onclick: () => run(savePending) }, t('goods.save_pending')),
     h('button', { class: 'btn small', onclick: () => run(discardPending) }, t('goods.discard_pending_button')));
 }
 
 async function savePending() {
+  if (typed.size) return;
   const goods = [...pending.values()];
   const result = await api.post('/api/project/goods', { goods, keep_images: keptImages() });
   if (result.errors.length) {
@@ -580,9 +613,10 @@ async function savePending() {
 }
 
 async function discardPending() {
-  if (!(await confirmDialog(t('goods.discard_pending', { count: pending.size }), t('company.discard')))) return;
+  const count = new Set([...pending.keys(), ...[...typed.values()].map((item) => item.key)]).size;
+  if (!(await confirmDialog(t('goods.discard_pending', { count }), t('company.discard')))) return;
   pending.clear();
-  quick = null;
+  typed.clear();
   renderBoard();
 }
 
@@ -628,7 +662,10 @@ function moveToNeed(key, from, to, copy) {
     model.needs.push(entry ? { ...entry, need: to }
       : { need: to, weight: '1', ...Object.fromEntries(NEED_FIELDS.slice(1).map((name) => [name, ''])) });
   }
-  if (leaves) model.needs = model.needs.filter((item) => item.need !== from);
+  if (leaves) {
+    model.needs = model.needs.filter((item) => item.need !== from);
+    typed.delete(from + ':' + key);
+  }
   boardChanged(key);
 }
 
@@ -639,12 +676,27 @@ function setCategory(key, category) {
   boardChanged(key);
 }
 
-function setShares(key, needKey, values) {
+// Values typed on a card: written to the board's change when they are valid, kept aside (and the card red)
+// while they are not. Only the card's own marks and the bar are redrawn, so the typing goes on.
+function typeShares(id, key, needKey, values, inputs) {
   const row = rowOf(key);
-  const entry = row && needsOfRow(row).find((item) => item.need === needKey);
-  if (!entry || NEED_FIELDS.every((name) => String(entry[name] ?? '') === values[name])) return;
-  Object.assign(changeOf(row).needs.find((item) => item.need === needKey), values);
-  boardChanged(key);
+  if (!row) return;
+  const problems = needRowProblems({ need: needKey, ...values }, key);
+  markNeedInputs(inputs, problems);
+  if (Object.keys(problems).length) {
+    typed.set(id, { key, need: needKey, values });
+  } else {
+    typed.delete(id);
+    const entry = needsOfRow(row).find((item) => item.need === needKey);
+    if (entry && NEED_FIELDS.some((name) => String(entry[name] ?? '') !== values[name])) {
+      Object.assign(changeOf(row).needs.find((item) => item.need === needKey), values);
+      settle(key);
+    }
+  }
+  for (const card of document.querySelectorAll('.goods-board-card')) {
+    if (card.dataset.key === key) card.classList.toggle('unsaved', pending.has(key));
+  }
+  renderPendingBar();
 }
 
 // ------------------------------------------------------------ dragging
@@ -790,15 +842,14 @@ function renderCategoryColumns() {
 
 // A good on the board. `extra` tells which card it is (`id`; a good can be in two needs) and where: its
 // category in the category view; in the needs view its need (`needKey`), its entry there (`need`) and whether
-// it is the need's default good, or `pool` for the goods in no need. A card in a need shows its weight and
-// shares where the others show the price (the price is then in the tooltip); a click on them types them.
+// it is the need's default good, or `pool` for the goods in no need. A card in a need has inputs for its
+// weight and shares under its head (the price is then in the tooltip).
 function goodCard(row, prestige, shown, filtering, extra = {}) {
   const good = rowItem(row);
   const id = extra.id || row.key;
   const open = popover === id;
   const toggle = () => {
     popover = open ? null : id;
-    quick = null;
     renderColumns();
   };
   const entry = extra.need;
@@ -806,8 +857,10 @@ function goodCard(row, prestige, shown, filtering, extra = {}) {
   const changes = prestige.filter((p) => p.mine).length;
   const query = filters.query.trim();
   const matched = query && shown.length ? shown.map(prestigeRowName) : [];
-  const typing = quick === id && entry;
-  const card = h('div', { class: 'law-group goods-board-card' + (open ? ' open' : '') + (pending.has(row.key) ? ' unsaved' : '') + (typing ? ' typing' : '') },
+  const card = h('div', {
+    class: 'law-group goods-board-card' + (open ? ' open' : '') + (pending.has(row.key) ? ' unsaved' : ''),
+    'data-key': row.key,
+  },
     h('div', {
       class: 'law-group-head', role: 'button', tabindex: '0', title: row.key, onclick: toggle,
       onkeydown: (event) => {
@@ -821,16 +874,16 @@ function goodCard(row, prestige, shown, filtering, extra = {}) {
       h('span', { class: 'law-group-text', title: entry ? price : null },
         h('span', { class: 'law-group-name' }, goodRowName(row),
           extra.isDefault && h('span', { class: 'goods-default', title: t('goods.need_default') }, ' ★')),
-        entry ? (typing ? quickEditor(row, extra.needKey, entry) : sharesButton(id, entry))
-          : h('span', { class: 'muted small' }, price),
+        !entry && h('span', { class: 'muted small' }, price),
         matched.length > 0 && h('span', { class: 'muted small goods-matched' },
           t('goods.prestige_matches', { names: matched.join('、') }))),
-      pending.has(row.key) && h('span', { class: 'goods-unsaved', title: t('goods.unsaved') }, '●'),
+      h('span', { class: 'goods-unsaved', title: t('goods.unsaved') }, '●'),
       row.mine && h('span', { class: 'badge accent' }, row.mine.mode === 'override' ? t('law.modified') : t('law.added')),
       changes > 0 && h('span', { class: 'badge accent', title: t('goods.prestige_changed_hint') },
         t('law.changed', { count: changes })),
       prestige.length > 0 && h('span', { class: 'badge', title: t('goods.prestige_count_hint') }, String(prestige.length)),
       h('span', { class: 'side-caret' }, open ? '▾' : '▸')),
+    entry && sharesInputs(id, row.key, extra.needKey, entry),
     open && h('div', { class: 'law-list goods-pop' },
       h('div', { class: 'row goods-card-actions' },
         h('button', { class: 'btn small', onclick: () => run(() => openGood(row)) },
@@ -841,67 +894,31 @@ function goodCard(row, prestige, shown, filtering, extra = {}) {
       shown.map((p) => prestigeRow(p, Boolean(query))),
       !shown.length && h('p', { class: 'muted small' }, t('goods.no_prestige')),
       h('button', { class: 'btn law-add', onclick: () => run(() => newPrestige(row.key)) }, `＋ ${t('pgood.new')}`)));
-  if (typing) return card;
   return dragSource(card, extra.category !== undefined ? { key: row.key, category: extra.category }
     : { key: row.key, need: extra.needKey || null });
 }
 
-// The weight and shares of a good in a need, as a line that turns into inputs when clicked.
-function sharesButton(id, entry) {
-  const parts = NEED_FIELDS.filter((name) => entry[name] !== '' && entry[name] != null)
-    .map((name) => `${t('goods.need_short.' + name)} ${entry[name]}`);
-  return h('button', {
-    class: 'goods-shares', title: t('goods.quick_hint'),
-    onclick: (event) => {
-      event.stopPropagation();
-      quick = id;
-      popover = null;
-      renderColumns();
-    },
-  }, parts.length ? parts.join(' · ') : `${t('goods.need_short.weight')} —`);
-}
-
-// Inputs for the weight and shares: Enter or leaving them keeps the values (when they are numbers),
-// Escape drops them.
-function quickEditor(row, needKey, entry) {
-  const id = quick;
+// The weight and shares of a good in a need, as inputs (what was typed and is not valid yet stays shown).
+// The card does not drag while they are used, so text can be selected in them.
+function sharesInputs(id, key, needKey, entry) {
+  const shown = typed.has(id) ? typed.get(id).values
+    : Object.fromEntries(NEED_FIELDS.map((name) => [name, String(entry[name] ?? '')]));
+  const read = () => Object.fromEntries(NEED_FIELDS.map((name) => [name, inputs[name].value.trim()]));
   const inputs = Object.fromEntries(NEED_FIELDS.map((name) => [name, h('input', {
-    class: 'input', value: entry[name] ?? '', placeholder: '—', inputmode: 'decimal',
-    oninput: (event) => event.target.classList.toggle('invalid',
-      Boolean(event.target.value.trim()) && !NUMBER_PATTERN.test(event.target.value.trim())),
+    class: 'input', type: 'text', inputmode: 'decimal', value: shown[name], placeholder: '—',
+    oninput: () => typeShares(id, key, needKey, read(), inputs),
   })]));
-  const commit = () => {
-    if (quick !== id) return;
-    const values = Object.fromEntries(NEED_FIELDS.map((name) => [name, inputs[name].value.trim()]));
-    const bad = NEED_FIELDS.find((name) => values[name] && !NUMBER_PATTERN.test(values[name]));
-    if (bad) {
-      inputs[bad].classList.add('invalid');
-      toast(t('gdproblem.need_value'), 'error');
-      inputs[bad].focus();
-      return;
-    }
-    quick = null;
-    setShares(row.key, needKey, values);
-    renderColumns();
-  };
-  const box = h('span', {
-    class: 'goods-quick',
-    onclick: (event) => event.stopPropagation(),
-    onkeydown: (event) => {
-      event.stopPropagation();
-      if (event.key === 'Enter') commit();
-      if (event.key === 'Escape') {
-        quick = null;
-        renderColumns();
-      }
-    },
+  markNeedInputs(inputs, needRowProblems({ need: needKey, ...shown }, key));
+  const box = h('div', {
+    class: 'goods-shares-row',
+    onmousedown: () => { box.parentElement.draggable = false; },
     onfocusout: (event) => {
-      if (!box.contains(event.relatedTarget)) commit();
+      if (!box.contains(event.relatedTarget)) box.parentElement.draggable = true;
+    },
+    onmouseup: () => {
+      if (!box.contains(document.activeElement)) box.parentElement.draggable = true;
     },
   }, NEED_FIELDS.map((name) => h('label', {}, t('goods.need_short.' + name), inputs[name])));
-  requestAnimationFrame(() => {
-    if (inputs.weight.isConnected) inputs.weight.select();
-  });
   return box;
 }
 
@@ -1137,12 +1154,20 @@ function marketSection() {
 
 function needRow(row) {
   const good = editing;
-  const inputs = NEED_FIELDS.map((name) => h('label', { class: 'goods-need-field' },
-    h('span', { class: 'muted small' }, t('goods.need_field.' + name)),
-    numberInput(row, name, name === 'weight' ? '1' : '')));
+  const inputs = Object.fromEntries(NEED_FIELDS.map((name) => [name, h('input', {
+    class: 'input level', type: 'text', inputmode: 'decimal', value: row[name] ?? '',
+    placeholder: name === 'weight' ? '1' : '',
+    oninput: (event) => {
+      row[name] = event.target.value.trim();
+      markNeedInputs(inputs, needRowProblems(row, good.key));
+      changed();
+    },
+  })]));
+  markNeedInputs(inputs, needRowProblems(row, good.key));
   return h('div', { class: 'goods-need-row' },
     h('span', { class: 'grow' }, h('span', {}, needName(row.need)), h('span', { class: 'company-key' }, row.need)),
-    inputs,
+    NEED_FIELDS.map((name) => h('label', { class: 'goods-need-field' },
+      h('span', { class: 'muted small' }, t('goods.need_field.' + name)), inputs[name])),
     h('button', { class: 'btn icon-btn', title: t('common.remove'), onclick: () => {
       good.needs = good.needs.filter((other) => other !== row);
       changed();

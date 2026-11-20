@@ -556,7 +556,9 @@ def _put_good(data, proj, clean, original_key):
     """Check one good and put it in the project (in place of `original_key`); its problems when it is not put."""
     others = [good for good in proj["goods"] if good["key"] != original_key]
     categories = set(GOODS_CATEGORIES) | {good["category"] for good in data.goods.values()}
-    game = {"goods": set(data.goods), "needs": set(data.pop_needs), "categories": categories}
+    unweighted = {(need, entry["goods"]) for need, block in data.pop_needs.items()
+                  for entry in block["entries"] if not entry["weight"]}
+    game = {"goods": set(data.goods), "needs": set(data.pop_needs), "categories": categories, "unweighted": unweighted}
     errors = validate_good(clean, game, others)
     if errors:
         return errors

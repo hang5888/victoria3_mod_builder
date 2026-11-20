@@ -560,6 +560,26 @@ class GoodsTest(unittest.TestCase):
         self.assertEqual(goods.validate_good(sample_good(key="automobiles", mode="override"), game, []), [])
         self.assertEqual(goods.validate_good(sample_good(), game, [sample_good()]), ["key_exists"])
 
+    def test_need_values(self):
+        def problems(weight="1", most="", least="", unweighted=False):
+            row = {"need": "n", "weight": weight, "max_supply_share": most, "min_supply_share": least}
+            return goods.need_row_problems(row, unweighted)
+        self.assertEqual(problems(), {})
+        self.assertEqual(problems("0.5", "1.0", "0.0"), {})
+        self.assertEqual(problems(""), {"weight": "need_weight"})
+        self.assertEqual(problems("", unweighted=True), {})
+        self.assertEqual(problems("0"), {"weight": "need_weight"})
+        self.assertEqual(problems("-1"), {"weight": "need_weight"})
+        self.assertEqual(problems("a"), {"weight": "need_value"})
+        self.assertEqual(problems("1", "1.5", "-0.1"), {"max_supply_share": "need_share", "min_supply_share": "need_share"})
+        self.assertEqual(problems("1", "0.2", "0.5"), {"min_supply_share": "need_order"})
+        self.assertEqual(problems("1", "", "0.5"), {})
+        game = {"goods": set(), "needs": {"n"}, "categories": set(goods.CATEGORIES), "unweighted": {("n", "x")}}
+        for key, weight, wanted in (("x", "", []), ("y", "", ["need_weight"]), ("y", "2", [])):
+            good = sample_good(key=key, needs=[{"need": "n", "weight": weight, "max_supply_share": "0.2",
+                                                "min_supply_share": "0.4"}])
+            self.assertEqual(goods.validate_good(good, game, []), wanted + ["need_order"])
+
     def test_normalize_drops_unsafe_input(self):
         for raw in ({"key": "x", "category": "a b"}, {"key": "x", "color": [1, 2]}, {"key": "x", "color": [1, 2, 300]},
                     {"key": "x", "needs": "x"}, {"key": "x", "needs": [{"need": "bad need"}]}):
@@ -1983,7 +2003,7 @@ class InterfaceTextTest(unittest.TestCase):
         "goods.view.": ["category", "needs"],
         "goods.need_short.": ["weight", "max_supply_share", "min_supply_share"],
         "gdproblem.": ["key_missing", "key_invalid", "key_exists", "icon_missing", "cost", "category", "number", "need",
-                       "need_value"],
+                       "need_value", "need_weight", "need_share", "need_order"],
         "pgproblem.": ["key_missing", "key_invalid", "key_exists", "base_good", "icon_missing", "prestige_bonus"],
         "country.tab.": ["country", "politics", "technology", "territory", "pops", "buildings", "diplomacy",
                          "characters", "other"],
