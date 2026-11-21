@@ -191,6 +191,7 @@ function modRow(mod, position) {
       enabled && h('span', { class: 'order' }, String(position + 1)),
       h('span', { title: mod.dir }, mod.name)),
     mod.has_companies && h('span', { class: 'badge accent' }, t('home.mod_has_companies')),
+    mod.builder && h('span', { class: 'badge' }, t('home.mod_builder')),
     h('span', { class: 'badge' }, t('home.mod_kind.' + mod.kind)),
     mod.game_version && h('span', { class: 'badge' }, mod.game_version),
     enabled && h('span', { class: 'mod-move' },

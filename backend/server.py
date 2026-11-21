@@ -65,10 +65,15 @@ class App:
     def folders_ok(self):
         return not any(mods.validate_folders(self.settings).values())
 
-    def all_mods(self):
-        """Installed mods that can be used as data sources (the tool's own mods are projects instead)."""
+    def is_current_project(self, mod):
+        current = self.settings.get("project_dir") or ""
+        return bool(current) and os.path.normcase(os.path.normpath(mod["dir"])) == os.path.normcase(os.path.normpath(current))
+
+    def all_mods(self, with_current=False):
+        """Installed mods that can be used as data sources, the tool's own mods too. Not the mod being
+        edited: read as a source, its changes would become what they change."""
         found = mods.discover_mods(self.settings["workshop_dir"], self.settings["local_mod_dir"])
-        return [m for m in found if not m["builder"]]
+        return [m for m in found if with_current or not self.is_current_project(m)]
 
     def enabled_mods(self):
         by_id = {m["id"]: m for m in self.all_mods()}
@@ -76,7 +81,7 @@ class App:
 
     def signature(self):
         s = self.settings
-        return json.dumps([s["game_dir"], s["workshop_dir"], s["local_mod_dir"], s["enabled_mods"]])
+        return json.dumps([s["game_dir"], s["workshop_dir"], s["local_mod_dir"], [m["id"] for m in self.enabled_mods()]])
 
     def require_data(self):
         if self.data is None:
@@ -235,7 +240,8 @@ def api_get(app, path, query):
         return app.state()
     if path == "/api/mods":
         with app.lock:
-            return {"mods": app.all_mods(), "enabled": app.settings["enabled_mods"],
+            shown = {m["id"] for m in app.all_mods()}
+            return {"mods": app.all_mods(), "enabled": [i for i in app.settings["enabled_mods"] if i in shown],
                     "playsets": mods.list_playsets(app.settings["local_mod_dir"])}
     if path == "/api/projects":
         return {"projects": project.list_projects(app.settings["local_mod_dir"])}
@@ -267,7 +273,13 @@ def api_post(app, path, body):
     if path == "/api/mods/enabled":
         with app.lock:
             known = {m["id"] for m in app.all_mods()}
-            s["enabled_mods"] = [i for i in body.get("enabled", []) if i in known]
+            enabled = [i for i in body.get("enabled", []) if i in known]
+            # the mod being edited is not in the list; it keeps its place for when another mod is edited
+            hidden = [m["id"] for m in app.all_mods(with_current=True) if app.is_current_project(m)]
+            for mod_id in hidden:
+                if mod_id in s["enabled_mods"] and mod_id not in enabled:
+                    enabled.insert(min(s["enabled_mods"].index(mod_id), len(enabled)), mod_id)
+            s["enabled_mods"] = enabled
             app.save_settings()
         return app.state()
     if path == "/api/playsets/import":
